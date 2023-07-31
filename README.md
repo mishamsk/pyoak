@@ -6,7 +6,7 @@
 
 Commerial-grade, well tested, documented and typed Python library for modeling, building, traversing, transforming, transferring and even pattern matching abstract syntax trees (AST) for arbtirary languages.
 
-## Features
+## Features <!-- omit from toc -->
 
 * 🌳 Easy to use dataclasses based, strictly typed, pseudo-immutable AST modeling
 * 📝 "Magic", auto-maintained node registry, allowing node cross-referncing and retrievel
@@ -17,6 +17,31 @@ Commerial-grade, well tested, documented and typed Python library for modeling, 
 * 🎯 Xpath-like AST search (top to the node)
 * 👯‍♂️ Node pattern matching with ability to capture specific sub-trees or attributes
 * ... and more!
+
+## Feature Roadmap <!-- omit from toc -->
+* Pattern matcher rewrite to a bespoke engine to avoid limitations of the current implementation
+* Context-aware pattern matching
+* Prettyfiyng pattern matching language to make it more friendly
+* Strict-mode with runtime field value type checking
+* Frozen version of ASTNode
+* Make orjson, pyyaml, msgpack & chardet optional dependencies
+* ~~rustify some parts for performance~~ well, that's too far-fetched
+
+## Table of Contents <!-- omit from toc -->
+- [Installation](#installation)
+- [Basic Usage](#basic-usage)
+- [Documentation](#documentation)
+    - [Defining a model](#defining-a-model)
+    - [Creating a node](#creating-a-node)
+    - [Traversal](#traversal)
+        - [Helpers](#helpers)
+    - [Xpath \& Pattern Matching](#xpath--pattern-matching)
+    - [Visitors \& Transformers](#visitors--transformers)
+    - [Serialization \& Deserialization](#serialization--deserialization)
+        - [Debugging \& Reporting Deserialization Errors for Deeply Nested Trees](#debugging--reporting-deserialization-errors-for-deeply-nested-trees)
+- [Credits](#credits)
+- [Links](#links)
+
 
 ## Installation
 
@@ -96,7 +121,46 @@ and this is just the tip of the iceberg!
 
 ## Documentation
 
-TBD
+The docs are not a book on code parsing, semantic analysis or AST transformations. It is assumed that you already know what ASTs are and looking for a library to make it a bit easier and more convenient to work with them in Python.
+
+pyoak code is strictly typed and heavily documented. Most public (and private) methods and system fields have extensive docstrings, thus it should be easy to use the library without reading the docs.
+
+It is strongly encouraged to use mypy/pyright (or your type checker of choice) as it will make working with ASTs a breeze, as well as help you to avoid many common mistakes.
+
+### Defining a model
+
+pyoak AST nodes are regular Python [dataclasses](https://docs.python.org/3/library/dataclasses.html), with ~~a lot of~~ some additional magic.
+
+To create a node you just need create a dataclass that inherits from `pyoak.node.ASTNode`.
+
+```python
+from dataclasses import dataclass
+from pyoak.node import ASTNode
+
+@dataclass
+class MyNode(ASTNode):
+    attribute: int
+    child: ASTNode | None
+    more_children: tuple[ASTNode, ...]
+```
+
+Any field that is either a union of `ASTNode` subclasses (including optional `None`), or a tuple/list of `ASTNode` subclasses will be considered as a child field. Anything else, including `dict[str, ASTNode]` won't become a child!
+
+Since node instances are assumed to me pseudo-immuateble (more on that below), it is not expected that you'll need anything beyond a tuple of children. Even list's are supported for legacy reasons and may/will be removed in the future.
+
+### Creating a node
+
+### Traversal
+
+#### Helpers
+
+### Xpath & Pattern Matching
+
+### Visitors & Transformers
+
+### Serialization & Deserialization
+
+#### Debugging & Reporting Deserialization Errors for Deeply Nested Trees
 
 ## Credits
 
