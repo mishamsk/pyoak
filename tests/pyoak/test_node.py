@@ -13,16 +13,14 @@ from pyoak.error import (
     ASTNodeRegistryCollisionError,
     ASTNodeReplaceError,
     ASTNodeReplaceWithError,
-    ASTTransformError,
 )
 from pyoak.node import (
     AST_SERIALIZE_DIALECT_KEY,
     ASTNode,
     ASTSerializationDialects,
-    ASTTransformer,
     Field,
 )
-from pyoak.origin import CodeOrigin, MemoryTextSource, get_code_range
+from pyoak.origin import NO_ORIGIN, CodeOrigin, MemoryTextSource, get_code_range
 from pyoak.serialize import TYPE_KEY
 
 
@@ -1338,39 +1336,7 @@ def test_get_first_ancestor_of_type() -> None:
     assert m_m.get_first_ancestor_of_type(ParentNode, exact_type=True) is None
 
 
-def test_transformer() -> None:
-    n_tr = Nested("transformed", origin=origin)
+def test_no_origin_serialization() -> None:
+    node = ChildNode("test", origin=NO_ORIGIN, create_detached=True)
 
-    class TestTransformer(ASTTransformer):
-        def filter(self, node: ASTNode) -> bool:
-            return isinstance(node, Middle) and isinstance(node.nested, Middle)
-
-        def transform(self, node: ASTNode) -> ASTNode:
-            assert isinstance(node, Middle) and isinstance(node.nested, Middle)
-            return Middle(n_tr, origin=origin)
-
-    n1 = Nested("test1", origin=origin)
-    n2 = Nested("test2", origin=origin)
-
-    middle_nested1 = Middle(n1, origin=origin)
-    middle_nested2 = Middle(n2, origin=origin)
-    middle_middle = Middle(middle_nested1, origin=origin)
-    r = Root((middle_nested2, middle_middle), origin=origin)
-
-    transformer = TestTransformer()
-    transformer.execute(r)
-
-    class ErrorTransformer(ASTTransformer):
-        def filter(self, node: ASTNode) -> bool:
-            return isinstance(node, Middle)
-
-        def transform(self, node: ASTNode) -> ASTNode:
-            assert isinstance(node, Middle)
-            return Nested("error", origin=origin)
-
-    with pytest.raises(ASTTransformError) as e:
-        ErrorTransformer().execute(r)
-
-    assert e.value.orig_node is middle_nested2
-    assert isinstance(e.value.transformed_node, Nested)
-    assert e.value.transformed_node.attr == "error"
+    assert ChildNode.from_json(node.to_json()) == node

@@ -35,8 +35,6 @@ class FQN(ABC):
 
 # -----------------------------------------------------------------------------
 # --------------------- Source bases & constants ---------------------------
-SourceType = t.TypeVar("SourceType", bound="Source")
-
 SOURCE_OPTIMIZED_SERIALIZATION_KEY = "source_optimized_serialization"
 """Use with (de)serialation functions via `serialization_options` to enable/disable optimized
 serialization of sources.
@@ -92,25 +90,30 @@ class Source(DataClassSerializeMixin, FQN):
         return super()._serialize()
 
     @classmethod
-    def _deserialize(cls: t.Type[SourceType], data: dict[str, t.Any]) -> SourceType:
-        if cls._get_deserialization_options().get(SOURCE_OPTIMIZED_SERIALIZATION_KEY, False):
-            idx = data.get("idx")
-            if idx is None:
-                raise ValueError("Missing idx in serialized source data")
-            ret: SourceType | None = None
-            for source, source_idx in Source._sources.items():
-                if source_idx == idx:
-                    return t.cast(SourceType, source)
+    def _deserialize(cls, data: dict[str, t.Any]) -> Source:
+        if data == {}:
+            return NoSource()
 
-            if ret is None:
-                raise ValueError(
-                    f"Source with idx {idx} not found in registry. Did you forget to load sources?"
-                )
-        # This may return not the object in the registry, but a new instance
-        # if the same source was previously in the registry
-        obj = super()._deserialize(data)
+        # Try to deserialize as optimized serialization
+        idx = data.get("idx")
 
-        return t.cast(SourceType, Source._source_idx_to_source[Source._sources[obj]])
+        if idx is None:
+            # This may return not the object in the registry, but a new instance
+            # if the same source was previously in the registry
+            obj = super()._deserialize(data)
+
+            idx = obj.source_registry_id
+        elif not isinstance(idx, int):
+            raise ValueError(f"Invalid value of idx <{idx}> in a serialized source.")
+
+        ret = Source._source_idx_to_source.get(idx)
+
+        if ret is None:
+            raise ValueError(
+                f"Source with idx {idx} not found in registry. Did you forget to load sources?"
+            )
+
+        return ret
 
     @staticmethod
     def load_serialized_sources(sources: list[dict[str, t.Any]]) -> None:
@@ -150,8 +153,8 @@ class Source(DataClassSerializeMixin, FQN):
     @classmethod
     def list_registered_sources(cls, exclude_no_source: bool = False) -> list[Source]:
         ret = list(cls._sources.keys())
-        if exclude_no_source and NoSource() in ret:
-            ret.remove(NoSource())
+        if not exclude_no_source:
+            ret.append(NO_SOURCE)
         return ret
 
     def __str__(self) -> str:
@@ -180,7 +183,12 @@ class TextSource(Source):
 class Position(DataClassSerializeMixin, FQN):
     """Base class for all position types."""
 
-    pass
+    @classmethod
+    def _deserialize(cls, value: dict[str, t.Any]) -> Position:
+        if value == {}:
+            return NO_POSITION
+
+        return super()._deserialize(value)
 
 
 @dataclass(frozen=True)
@@ -196,6 +204,13 @@ class Origin(DataClassSerializeMixin, FQN):
 
         if not isinstance(self.position, Position):
             raise TypeError(f"Expected Position, got {type(self.position)}")
+
+    @classmethod
+    def _deserialize(cls, value: dict[str, t.Any]) -> Origin:
+        if value == {}:
+            return NO_ORIGIN
+
+        return super()._deserialize(value)
 
     def __str__(self) -> str:
         return f"{self.source.source_type}@{self.fqn}"
@@ -226,8 +241,23 @@ class NoSource(Source):
             cls._instance = object.__new__(cls, *args, **kwargs)
         return cls._instance
 
+    def __post_init__(self) -> None:
+        # Prevents NoSource from being added to the registry
+        pass
+
+    def _serialize(self) -> dict[str, t.Any]:
+        return {}
+
     def get_raw(self) -> None:
         return None
+
+    @property
+    def source_registry_id(self) -> int:
+        # No Source does not have a "real" registry id
+        return -1
+
+
+NO_SOURCE = NoSource()
 
 
 @dataclass(frozen=True)
@@ -239,9 +269,15 @@ class NoPosition(Position):
             cls._instance = object.__new__(cls, *args, **kwargs)
         return cls._instance
 
+    def _serialize(self) -> dict[str, t.Any]:
+        return {}
+
     @property
     def fqn(self) -> str:
         return "NoPosition"
+
+
+NO_POSITION = NoPosition()
 
 
 @dataclass(frozen=True)
@@ -256,6 +292,9 @@ class NoOrigin(Origin):
             cls._instance = object.__new__(cls, *args, **kwargs)
         return cls._instance
 
+    def _serialize(self) -> dict[str, t.Any]:
+        return {}
+
     @property
     def fqn(self) -> str:
         return "NoOrigin"
@@ -263,6 +302,8 @@ class NoOrigin(Origin):
     def get_raw(self) -> None:
         return None
 
+
+NO_ORIGIN = NoOrigin()
 
 # -----------------------------------------------------------------------------
 # ----------------------------- Source Classess ---------------------------------
