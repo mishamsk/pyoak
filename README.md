@@ -6,7 +6,7 @@
 
 Commerial-grade, well tested, documented and typed Python library for modeling, building, traversing, transforming, transferring and even pattern matching abstract syntax trees (AST) for arbtirary languages.
 
-## Features <!-- omit from toc -->
+## Features<!-- omit from toc -->
 
 * 🌳 Easy to use dataclasses based, strictly typed, pseudo-immutable AST modeling
 * 📝 "Magic", auto-maintained node registry, allowing node cross-referncing and retrievel
@@ -18,7 +18,7 @@ Commerial-grade, well tested, documented and typed Python library for modeling, 
 * 👯‍♂️ Node pattern matching with ability to capture specific sub-trees or attributes
 * ... and more!
 
-## Feature Roadmap <!-- omit from toc -->
+## Feature Roadmap<!-- omit from toc -->
 * Pattern matcher rewrite to a bespoke engine to avoid limitations of the current implementation
 * Context-aware pattern matching
 * Prettyfiyng pattern matching language to make it more friendly
