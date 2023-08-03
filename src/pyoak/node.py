@@ -131,14 +131,13 @@ class ASTNode(DataClassSerializeMixin):
         - Maintains a parent-child relationship between nodes
         - Methods for replacing attributes or whole nodes
         - Various tree walking methods
-        - Visitor API (visit method)
+        - Visitor API (accept method)
         - Serialization & deserialization
         - rich console API support (for printing)
 
     Notes:
         - Subclasses must be dataclasses
         - Only fields with subclasses of ASTNode or tuples/lists of ASTNode subclasses are considered children
-        - fields starting with "_" are not serialized
 
     Raises:
         ASTNodeError: If there are children with a different parent alredy assigned (every AST node can only have one parent)
@@ -557,6 +556,19 @@ class ASTNode(DataClassSerializeMixin):
         default: ASTNodeType | None = None,
         strict: bool = True,
     ) -> ASTNodeType | None:
+        """Gets a node of this class type from the AST registry.
+
+        Args:
+            id (str): The id of the node to get
+            default (ASTNodeType | None, optional): The default value to return if the node is not found.
+                Defaults to None.
+            strict (bool, optional): If True, only a node of this class type is returned.
+                Otherwise an instnace if any subclass is allowed. Defaults to True.
+
+        Returns:
+            ASTNodeType | None: The node if found, otherwise the default value
+
+        """
         ret = ASTNode._nodes.get(id, default)
         if ret is None:
             return None
@@ -569,6 +581,17 @@ class ASTNode(DataClassSerializeMixin):
 
     @classmethod
     def get_any(cls, id: str, default: ASTNode | None = None) -> ASTNode | None:
+        """Gets a node of any type from the AST registry by id.
+
+        Args:
+            id (str): The id of the node to get
+            default (ASTNode | None, optional): The default value to return if the node is not found.
+                Defaults to None.
+
+        Returns:
+            ASTNode | None: The node if found, otherwise the default value
+
+        """
         return ASTNode._nodes.get(id, default)
 
     def attach(self) -> None:
@@ -942,6 +965,11 @@ class ASTNode(DataClassSerializeMixin):
         return ret
 
     def calculate_xpath(self) -> bool:
+        """Calculates the xpath of this node and all its children.
+
+        This is a legacy method. The use of match.xpath module is preferred.
+
+        """
         if not self.is_attached_root:
             logger.debug("Cannot calculate xpath for a non-root node")
             return False
@@ -1003,6 +1031,9 @@ class ASTNode(DataClassSerializeMixin):
     @property
     def xpath(self) -> str | None:
         """Returns the last calculated xpath of this node.
+
+        This is the legacy xpath that may be removed in the future.
+        The recommended way of matching nodes by xpath is via the match.xpath module.
 
         To calculate the xpath, use `calculate_xpath` or root node.
 
@@ -1438,6 +1469,7 @@ class ASTNode(DataClassSerializeMixin):
             yield getattr(self, f.name), f
 
     def get_child_nodes(self) -> t.Iterable[ASTNode]:
+        """Returns a generator object which yields all child nodes."""
         for f in fields(self):
             # Skip non-child fields
             if not self._is_field_child(f):
@@ -1514,11 +1546,6 @@ class ASTNode(DataClassSerializeMixin):
     __hash__ = None  # type: ignore # Make sure even frozen dataclasses will not be hashable
 
     def __init_subclass__(cls) -> None:
-        """Register subclasses and enforce hash function by object ID to all ASTNode subclasses.
-
-        Dataclasses by default will remove hashing by ID, but we want it back for ASTNodes.
-
-        """
         cls.__hash__ = None  # type: ignore # Make sure even frozen dataclasses will not be hashable
 
         # Make sure each class uses it's own list of child fields & properties
@@ -1615,6 +1642,11 @@ class ASTTransformVisitor(ASTVisitor[ASTNode | None]):
     def _transform_children(
         self, node: ASTNode
     ) -> t.Mapping[str, ASTNode | None | list[ASTNode] | tuple[ASTNode, ...]]:
+        """Transforms the children of a given node and returns a mapping of field names to changes.
+
+        This mapping can be passed to ASTNode.replace method.
+
+        """
         changes: dict[str, ASTNode | None | list[ASTNode] | tuple[ASTNode, ...]] = {}
         field_names_with_changes = set()
 
@@ -1692,6 +1724,19 @@ class ASTTransformVisitor(ASTVisitor[ASTNode | None]):
         return self.transform(node)
 
     def transform(self, node: ASTNode) -> ASTNode | None:
+        """Transforms a given node and returns the transformed node or None if the node was removed.
+
+        Args:
+            node (ASTNode): The node to transform
+
+        Returns:
+            ASTNode | None: The transformed node or None if the node was removed.
+
+        Raises:
+            ASTTransformError: If the transformation fails with the original exception
+                as context.
+
+        """
         orig_node: ASTNode | None = None
 
         # If we are transforming an attached tree or subtree
