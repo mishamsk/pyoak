@@ -2,6 +2,9 @@ from pathlib import Path
 
 import pytest
 from pyoak.origin import (
+    NO_ORIGIN,
+    NO_POSITION,
+    NO_SOURCE,
     SETS_DELIM,
     SOURCE_OPTIMIZED_SERIALIZATION_KEY,
     URI_DELIM,
@@ -16,6 +19,7 @@ from pyoak.origin import (
     NoPosition,
     NoSource,
     Origin,
+    Position,
     PositionSet,
     Source,
     SourceSet,
@@ -331,15 +335,25 @@ def test_no_origin() -> None:
     assert ns.get_raw() is None  # type: ignore[func-returns-value]
     assert ns.fqn == "NoSource"
     assert ns is NoSource()
+    assert ns is NO_SOURCE
+    assert ns.source_registry_id == -1
+    assert ns.as_dict() == {}
+    assert Source.as_obj({}) is NO_SOURCE
     assert ns is NoSource.from_json(ns.to_json())
     np = NoPosition()
     assert np.fqn == "NoPosition"
     assert np is NoPosition()
+    assert np is NO_POSITION
+    assert np.as_dict() == {}
+    assert Position.as_obj({}) is NO_POSITION
     assert np is NoPosition.from_json(np.to_json())
     no = NoOrigin()
     assert no.get_raw() is None  # type: ignore[func-returns-value]
     assert no.fqn == "NoOrigin"
     assert no is NoOrigin()
+    assert no is NO_ORIGIN
+    assert no.as_dict() == {}
+    assert Origin.as_obj({}) is NO_ORIGIN
     assert no == NoOrigin.from_json(no.to_json())
 
 
