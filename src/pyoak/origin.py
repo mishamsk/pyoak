@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .file import read_text_unknown_encoding
-from .serialize import DataClassSerializeMixin
+from .serialize import TYPE_KEY, DataClassSerializeMixin
 
 if t.TYPE_CHECKING:
     from mashumaro.dialect import Dialect
@@ -91,7 +91,7 @@ class Source(DataClassSerializeMixin, FQN):
 
     @classmethod
     def _deserialize(cls, data: dict[str, t.Any]) -> Source:
-        if data == {}:
+        if data == {} or (TYPE_KEY in data and data[TYPE_KEY] == "NoSource"):
             return NoSource()
 
         # Try to deserialize as optimized serialization
@@ -185,7 +185,7 @@ class Position(DataClassSerializeMixin, FQN):
 
     @classmethod
     def _deserialize(cls, value: dict[str, t.Any]) -> Position:
-        if value == {}:
+        if value == {} or (TYPE_KEY in value and value[TYPE_KEY] == "NoPosition"):
             return NO_POSITION
 
         return super()._deserialize(value)
@@ -207,7 +207,7 @@ class Origin(DataClassSerializeMixin, FQN):
 
     @classmethod
     def _deserialize(cls, value: dict[str, t.Any]) -> Origin:
-        if value == {}:
+        if value == {} or (TYPE_KEY in value and value[TYPE_KEY] == "NoOrigin"):
             return NO_ORIGIN
 
         return super()._deserialize(value)

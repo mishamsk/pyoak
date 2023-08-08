@@ -340,6 +340,12 @@ def test_no_origin() -> None:
     assert ns.as_dict() == {}
     assert Source.as_obj({}) is NO_SOURCE
     assert ns is NoSource.from_json(ns.to_json())
+
+    # Test support for pre-1.1.0 serialization format
+    assert ns is Source.as_obj(
+        {"source_uri": "NoSource", "source_type": "NoSource", "__type": "NoSource"}
+    )
+
     np = NoPosition()
     assert np.fqn == "NoPosition"
     assert np is NoPosition()
@@ -347,6 +353,10 @@ def test_no_origin() -> None:
     assert np.as_dict() == {}
     assert Position.as_obj({}) is NO_POSITION
     assert np is NoPosition.from_json(np.to_json())
+
+    # Test support for pre-1.1.0 serialization format
+    assert np is Position.as_obj({"__type": "NoPosition"})
+
     no = NoOrigin()
     assert no.get_raw() is None  # type: ignore[func-returns-value]
     assert no.fqn == "NoOrigin"
@@ -355,6 +365,15 @@ def test_no_origin() -> None:
     assert no.as_dict() == {}
     assert Origin.as_obj({}) is NO_ORIGIN
     assert no == NoOrigin.from_json(no.to_json())
+
+    # Test support for pre-1.1.0 serialization format
+    assert no is Origin.as_obj(
+        {
+            "__type": "NoOrigin",
+            "source": {"__type": "NoSource", "source_uri": "NoSource", "source_type": "NoSource"},
+            "position": {"__type": "NoPosition"},
+        }
+    )
 
 
 def test_optimized_source_serialization() -> None:
@@ -383,18 +402,13 @@ def test_optimized_source_serialization() -> None:
 
     # Now it should fail
     with pytest.raises(ValueError):
-        Origin.as_obj(
-            serialized_mo,
-            serialization_options={SOURCE_OPTIMIZED_SERIALIZATION_KEY: True},
-        )
+        Origin.as_obj(serialized_mo)
 
     # Load the sources back
     Source.load_serialized_sources(source_dicts)
 
     # Now it should works
-    deserialized_mo = Origin.as_obj(
-        serialized_mo, serialization_options={SOURCE_OPTIMIZED_SERIALIZATION_KEY: True}
-    )
+    deserialized_mo = Origin.as_obj(serialized_mo)
     assert deserialized_mo == mo
 
 
