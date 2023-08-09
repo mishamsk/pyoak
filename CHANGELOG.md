@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - TBD
 
+## [1.1.1] - 2023-08-02
+
+Quick hotfix release to restore backwards compatibility with 1.0.0
+
+### 🐛 Fixed
+
+- 1.1.0 wouldn't deserialize NoSource/NoPosition/NoOrigin serialized by an earlier version of the library. This is now fixed and the lib should be fully backwards compatible.
+
 ## [1.1.0] - 2023-08-02
 
 ### 🚀 Added
