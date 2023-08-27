@@ -1,26 +1,23 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pytest
 from pyoak.match.pattern import PatternMatcher
 from pyoak.node import ASTNode
-from pyoak.origin import NoOrigin
-
-origin = NoOrigin()
 
 
-@dataclass
+@dataclass(frozen=True)
 class PTestChild1(ASTNode):
     foo: str
 
 
-@dataclass
+@dataclass(frozen=True)
 class PTestChild2(ASTNode):
     bar: str
 
 
-@dataclass
+@dataclass(frozen=True)
 class PTestParent(ASTNode):
     foo: str = "foo_val"
     bar: str = "bar_val"
@@ -31,7 +28,7 @@ class PTestParent(ASTNode):
     child_tuple2: tuple[ASTNode, ...] = field(default_factory=tuple)
 
 
-@dataclass
+@dataclass(frozen=True)
 class PTestChildMultiAttrs(ASTNode):
     foo: str
     bar: str
@@ -172,7 +169,7 @@ def test_correct_pattern_grammar(rule: str, pattern_def: str) -> None:
 
 
 def test_attr_checks() -> None:
-    node = PTestChildMultiAttrs("fooval", "barval", "bazval", "zazval", origin=NoOrigin())
+    node = PTestChildMultiAttrs("fooval", "barval", "bazval", "zazval")
     test_content_id = node.content_id
 
     # Test match by content_id
@@ -248,9 +245,8 @@ def test_attr_value_capture() -> None:
     rule = "(PTestParent @[child1=(PTestChild1 #[foo -> test_capture])])"
     matcher = PatternMatcher([("rule", rule)])
     node = PTestParent(
-        child1=PTestChild1("capture_value", origin=origin),
-        child_any=PTestChild2("non_capture", origin=origin),
-        origin=origin,
+        child1=PTestChild1("capture_value"),
+        child_any=PTestChild2("non_capture"),
     )
 
     match = matcher.match(node)
@@ -262,9 +258,7 @@ def test_attr_value_capture() -> None:
 
 def test_child_field_match() -> None:
     # Test none match
-    node = PTestParent(
-        origin=origin,
-    )
+    node = PTestParent()
 
     matcher = PatternMatcher(
         [
@@ -278,16 +272,17 @@ def test_child_field_match() -> None:
     assert match is not None
     assert match[0] == "rule_all_none"
 
-    node = node.replace(child1=PTestChild1("deep_1", origin=origin))
+    node = replace(node, child1=PTestChild1("deep_1"))
     match = matcher.match(node)
     assert match is not None
     assert match[0] == "rule_second_none"
 
-    node = node.replace(
+    node = replace(
+        node,
         child1=None,
         child_tuple=(
-            PTestChild1("deep_2", origin=origin),
-            PTestChild1("deep_3", origin=origin),
+            PTestChild1("deep_2"),
+            PTestChild1("deep_3"),
         ),
     )
     match = matcher.match(node)
@@ -297,17 +292,15 @@ def test_child_field_match() -> None:
 
 def test_child_spec_capture() -> None:
     sub1 = PTestParent(
-        child1=PTestChild1("deep_1", origin=origin),
-        child_any=PTestChild2("deep_2", origin=origin),
+        child1=PTestChild1("deep_1"),
+        child_any=PTestChild2("deep_2"),
         sub_parent=None,
-        origin=origin,
     )
 
     sub2 = sub1.duplicate()
 
     node = PTestParent(
         child_tuple=(sub1, sub2),
-        origin=origin,
     )
 
     rule = "(PTestParent @[child_tuple -> test_capture])"
@@ -319,17 +312,13 @@ def test_child_spec_capture() -> None:
     assert rule == "rule"
     assert values["test_capture"] == [sub1, sub2]
 
-    # drop everything to avoid collisions
-    node.detach()
-
     # Test array capture with follow rules
-    f1 = PTestChild1("predecessor", origin=origin)
+    f1 = PTestChild1("predecessor")
     f2 = f1.duplicate()
-    only1 = PTestChild2("only1", origin=origin)
+    only1 = PTestChild2("only1")
 
     node = PTestParent(
         child_tuple=(f1, f2, only1, sub1, sub2),
-        origin=origin,
     )
 
     rule = "(PTestParent @[child_tuple =[(PTestChild1), (PTestChild2)~1 -> only_capture, *]])"

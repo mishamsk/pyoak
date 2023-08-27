@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from typing import Mapping, Sequence
+from typing import Mapping, Sequence, Type
 
 from lark import Tree
 
-from pyoak.node import ASTNode
+from pyoak.legacy.node import AwareASTNode as ASTNode
 
-from ..serialize import TYPES
+from ...serialize import TYPES
 
 
 def check_ast_node_type(class_name: str) -> tuple[bool, str]:
@@ -17,7 +17,7 @@ def check_ast_node_type(class_name: str) -> tuple[bool, str]:
     return True, ""
 
 
-def check_and_get_ast_node_type(class_name: str) -> tuple[type[ASTNode] | None, str]:
+def check_and_get_ast_node_type(class_name: str) -> tuple[Type[ASTNode] | None, str]:
     if class_name not in TYPES:
         return None, f"Unknown AST type: <{class_name}>"
 

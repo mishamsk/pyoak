@@ -21,7 +21,7 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    from pyoak.node import ASTNode
+    from pyoak.legacy.node import AwareASTNode as ASTNode
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ def has_node_in_type(type_: Any) -> bool:
     """Return True if the type include any subclasses of ASTNode."""
 
     # Dynamically import to avoid circular imports
-    from pyoak.node import ASTNode
+    from pyoak.legacy.node import AwareASTNode as ASTNode
 
     try:
         if issubclass(type_, ASTNode):
@@ -95,7 +95,7 @@ def is_child_node(type_: Any, allow_sequence: bool = True, strict: bool = False)
     """Return True if the type is a child node."""
 
     # Dynamically import to avoid circular imports
-    from pyoak.node import ASTNode
+    from pyoak.legacy.node import AwareASTNode as ASTNode
 
     arg_check_func = any if not strict else all
 
@@ -144,11 +144,10 @@ def get_node_type_info(type_: Any, allow_sequence: bool = True) -> ChildFieldTyp
     """Get a tuple of ASTNode subclasses from a type annotation.
 
     For lists and tuples, the types of the elements are returned.
-
     """
 
     # Dynamically import to avoid circular imports
-    from pyoak.node import ASTNode
+    from pyoak.legacy.node import AwareASTNode as ASTNode
 
     args = get_args(type_)
     if is_optional(type_):
@@ -204,7 +203,15 @@ def get_field_types(type_: Type[ASTNode]) -> dict[str, Any]:
     for field in fields(type_):
         f_type = field.type
         if isinstance(f_type, str):
-            f_type = get_type_hints(type_).get(field.name)
+            try:
+                f_type = get_type_hints(type_).get(field.name)
+            except NameError:
+                logger.warning(
+                    f"Could not determine type of field {field.name} for type {type_}. "
+                    "This is probably due to a forward reference. "
+                    "Please, use type annotations instead of strings."
+                )
+                f_type = None
 
         if f_type is None:
             raise RuntimeError(f"Could not determine type of field {field.name} for type {type_}")

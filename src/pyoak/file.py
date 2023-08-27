@@ -7,14 +7,14 @@ logger = logging.getLogger(__name__)
 
 
 def read_text_unknown_encoding(file: Path) -> str | None:
-    """Read a file and return the contents as a string. Will guess the encoding if it is not UTF-8.
+    """Read a file and return the contents as a string. Will guess the encoding
+    if it is not UTF-8.
 
     Args:
         file (Path): Path to the file
 
     Returns:
         str | None: Contents of the file if the file was read successfully, None otherwise
-
     """
     logger.debug(f"Reading file <{file}>")
     raw_text = ""
