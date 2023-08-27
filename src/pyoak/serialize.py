@@ -54,10 +54,13 @@ class SerializationOption(str, enum.Enum):
 
 
 TYPE_KEY = "__type"
-"""Key used to store/read DataClassSerializeMixin type during (de)serialization."""
+"""Key used to store/read DataClassSerializeMixin type during
+(de)serialization."""
 
 
 class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
+    __slots__ = ()
+
     __serialization_options: ClassVar[dict[str, Any]] = {}
     __mashumaro_dialect: ClassVar[Type[Dialect] | None] = None
 
@@ -128,15 +131,20 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
             return cast(T, clazz.from_dict(value))
 
     def __init_subclass__(cls, **kwargs: Any):
-        if cls.__name__ in TYPES:
-            package = "Unknown"
-            module = inspect.getmodule(TYPES[cls.__name__])
-            if module is not None:
-                package = str(module.__package__)
+        if (old_type := TYPES.get(cls.__name__)) is not None:
+            # We are not allowed to redefine a class that is already defined in a different package
+            # except for one case - when dataclass re-creates the class with __slots__.
+            new_slotted = hasattr(cls, "__slots__")
+            old_slotted = hasattr(old_type, "__slots__")
 
-            raise ValueError(
-                f"DataClassSerializeMixin subclass <{cls.__name__}> is already defined in package <{package}>. Please use a different name."
-            )
+            new_module = inspect.getmodule(cls)
+            old_module = inspect.getmodule(TYPES[cls.__name__])
+
+            if new_module is not old_module or old_slotted or not new_slotted:
+                raise ValueError(
+                    f"DataClassSerializeMixin subclass <{cls.__name__}> is already defined "
+                    f"in {old_module!s}. Please use a different name."
+                )
 
         TYPES[cls.__name__] = cls
         return super().__init_subclass__(**kwargs)
@@ -155,7 +163,6 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
 
         Returns:
             dict[str, Any]: The serialized object.
-
         """
 
         # Store the options and mashumaro dialect for use by subclasses
@@ -190,7 +197,6 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
 
         Returns:
             T: The deserialized object.
-
         """
 
         # Store the options and mashumaro dialect for use by subclasses
@@ -224,7 +230,6 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
 
         Returns:
             bytes: The serialized object.
-
         """
         if indent:
             return orjson.dumps(
@@ -259,7 +264,6 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
 
         Returns:
             str: The serialized object.
-
         """
         return self.to_jsonb(indent=indent, serialization_options=serialization_options).decode(
             encoding="utf-8"
@@ -282,7 +286,6 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
 
         Returns:
             T: The deserialized object.
-
         """
 
         return cls.as_obj(
@@ -302,7 +305,6 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
 
         Returns:
             bytes: The serialized object.
-
         """
         return cast(
             bytes,
@@ -330,7 +332,6 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
 
         Returns:
             T: The deserialized object.
-
         """
 
         return cls.as_obj(
@@ -355,7 +356,6 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
 
         Returns:
             str: The serialized object.
-
         """
         return yaml.dump(
             (
@@ -386,7 +386,6 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
 
         Returns:
             T: The deserialized object.
-
         """
 
         return cls.as_obj(
@@ -397,12 +396,13 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
 
 
 def unwrap_invalid_field_exception(exc: InvalidFieldValue) -> tuple[str, BaseException]:
-    """Takes InvalidFieldValue exception and returns a tuple of a path to the nested field that
-    caused the first non InvalidFieldValue exception as well as the actual exception object.
+    """Takes InvalidFieldValue exception and returns a tuple of a path to the
+    nested field that caused the first non InvalidFieldValue exception as well
+    as the actual exception object.
 
-    If the exception doesn't contain any nested exceptions, the path will be the same as the field
-    name and the exception object will be the same as the one passed in.
-
+    If the exception doesn't contain any nested exceptions, the path
+    will be the same as the field name and the exception object will be
+    the same as the one passed in.
     """
     path = exc.field_name
     out_exc: BaseException = exc

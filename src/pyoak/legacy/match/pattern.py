@@ -11,12 +11,12 @@ from lark import Lark, Token, Tree, UnexpectedInput
 from lark.lexer import Lexer, LexerState
 from lark.visitors import Interpreter
 
-from pyoak.match.error import ASTPatternDefinitionError, ASTPatternDidNotMatchError
-from pyoak.match.grammar import PATTERN_DEF_GRAMMAR
-from pyoak.match.helpers import check_ast_node_type, maybe_capture_rule
-from pyoak.node import ASTNode
+from pyoak.legacy.match.error import ASTPatternDefinitionError, ASTPatternDidNotMatchError
+from pyoak.legacy.match.grammar import PATTERN_DEF_GRAMMAR
+from pyoak.legacy.match.helpers import check_ast_node_type, maybe_capture_rule
+from pyoak.legacy.node import AwareASTNode as ASTNode
 
-from ..serialize import TYPES
+from ...serialize import TYPES
 
 if TYPE_CHECKING:
     from lark.common import LexerConf
@@ -593,8 +593,10 @@ class ASTMatchingLexer(Lexer):
         for val, f in sorted(
             node.get_properties(
                 skip_id=False,
-                skip_content_id=False,
                 skip_origin=False,
+                skip_original_id=False,
+                skip_id_collision_with=False,
+                skip_hidden=False,
                 skip_non_compare=False,
             ),
             key=lambda x: x[1].name,
@@ -643,7 +645,7 @@ class ASTMatchingLexer(Lexer):
                         ast_nodes=[node],
                     )
 
-        for child, f in sorted(node.iter_child_fields(), key=lambda x: x[1].name):
+        for child, f in sorted(node._iter_child_fields(), key=lambda x: x[1].name):
             if isinstance(child, ASTNode):
                 ast_nodes: Sequence[ASTNode] | None = [child]
             else:
@@ -673,7 +675,7 @@ class ASTMatchingLexer(Lexer):
                     ASTTokenType.CHILD_VALUE,
                     ast_nodes=None,
                 )
-            elif isinstance(child, tuple):
+            elif isinstance(child, Sequence):
                 if len(child) == 0:
                     yield ASTToken(
                         Constants.EMPTY_TUPLE_TOKEN,

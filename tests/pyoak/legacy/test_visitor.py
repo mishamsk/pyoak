@@ -3,29 +3,29 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
-from pyoak.node import ASTNode
+from pyoak.legacy.node import ASTVisitor
+from pyoak.legacy.node import AwareASTNode as ASTNode
 from pyoak.origin import NoOrigin
-from pyoak.visitor import ASTVisitor
 
 
-@dataclass(frozen=True)
-class VisitorTestChildNode(ASTNode):
+@dataclass
+class LegacyVisitorTestChildNode(ASTNode):
     attr: str
 
 
-@dataclass(frozen=True)
-class VisitorTestSubclassChildNode(VisitorTestChildNode):
+@dataclass
+class LegacyVisitorTestSubclassChildNode(LegacyVisitorTestChildNode):
     attr2: str
 
 
-@dataclass(frozen=True)
-class VisitorTestParentNode(ASTNode):
-    child: VisitorTestChildNode
+@dataclass
+class LegacyVisitorTestParentNode(ASTNode):
+    child: LegacyVisitorTestChildNode
 
 
 def test_visitor() -> None:
-    test_child = VisitorTestSubclassChildNode("test", "test2", origin=NoOrigin())
-    test_parent = VisitorTestParentNode(test_child, origin=NoOrigin())
+    test_child = LegacyVisitorTestSubclassChildNode("test", "test2", origin=NoOrigin())
+    test_parent = LegacyVisitorTestParentNode(test_child, origin=NoOrigin())
 
     class NonStrictVisitor(ASTVisitor[list[str]]):
         def generic_visit(self, node: ASTNode) -> list[str]:
@@ -34,11 +34,11 @@ def test_visitor() -> None:
                 ret.extend(self.visit(child))
             return ret
 
-        def visit_VisitorTestChildNode(self, node: VisitorTestChildNode) -> list[str]:
+        def visit_LegacyVisitorTestChildNode(self, node: LegacyVisitorTestChildNode) -> list[str]:
             return [node.attr]
 
     assert NonStrictVisitor().visit(test_parent) == [
-        "VisitorTestParentNode",
+        "LegacyVisitorTestParentNode",
         "test",
     ]
 
@@ -51,16 +51,16 @@ def test_visitor() -> None:
                 ret.extend(self.visit(child))
             return ret
 
-        def visit_VisitorTestChildNode(self, node: VisitorTestChildNode) -> list[str]:
+        def visit_LegacyVisitorTestChildNode(self, node: LegacyVisitorTestChildNode) -> list[str]:
             return [node.attr]
 
-        def visit_VisitorTestSubclassChildNode(
-            self, node: VisitorTestSubclassChildNode
+        def visit_LegacyVisitorTestSubclassChildNode(
+            self, node: LegacyVisitorTestSubclassChildNode
         ) -> list[str]:
             return [node.attr2]
 
     assert StrictVisitor2().visit(test_parent) == [
-        "VisitorTestParentNode",
+        "LegacyVisitorTestParentNode",
         "test2",
     ]
 
@@ -68,7 +68,7 @@ def test_visitor() -> None:
 def test_visitor_validation() -> None:
     # Test validation does not kick in without the validate flag
     class FirstDummyVisitor(ASTVisitor[None]):
-        def visit_SomeNode(self, node: VisitorTestChildNode) -> None:
+        def visit_SomeNode(self, node: LegacyVisitorTestChildNode) -> None:
             pass
 
     # Test validation passes with no type annotations
@@ -79,13 +79,13 @@ def test_visitor_validation() -> None:
     with pytest.raises(TypeError) as err:
 
         class FailingDummyVisitor(ASTVisitor[None], validate=True):
-            def visit_SomeNode(self, node: VisitorTestChildNode) -> None:
+            def visit_SomeNode(self, node: LegacyVisitorTestChildNode) -> None:
                 pass
 
-            def visit_OtherNode(self, node: VisitorTestChildNode) -> None:
+            def visit_OtherNode(self, node: LegacyVisitorTestChildNode) -> None:
                 pass
 
     assert (
         err.value.args[0]
-        == "Visitor class 'FailingDummyVisitor' method(s) 'visit_OtherNode, visit_SomeNode' do not match node type annotation(s) 'VisitorTestChildNode, VisitorTestChildNode'"
+        == "Visitor class 'FailingDummyVisitor' method(s) 'visit_OtherNode, visit_SomeNode' do not match node type annotation(s) 'LegacyVisitorTestChildNode, LegacyVisitorTestChildNode'"
     )

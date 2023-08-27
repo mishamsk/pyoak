@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
 
-from pyoak.helpers import (
+from pyoak.legacy.helpers import (
     get_ast_node_child_fields,
     get_ast_node_properties,
     has_node_in_type,
@@ -14,27 +14,27 @@ from pyoak.helpers import (
     is_tuple,
     is_union,
 )
-from pyoak.node import ASTNode
+from pyoak.legacy.node import AwareASTNode as ASTNode
 
 
 @dataclass
-class PAHelpersTestSubASTNode1(ASTNode):
+class LegacyPAHelpersTestSubASTNode1(ASTNode):
     prop: str
     child: ASTNode
     child_list: tuple[ASTNode, ...]
 
 
 @dataclass
-class PAHelpersTestSubASTNode2(ASTNode):
+class LegacyPAHelpersTestSubASTNode2(ASTNode):
     prop: str
-    child1: PAHelpersTestSubASTNode1
-    child2: PAHelpersTestSubASTNode3
+    child1: LegacyPAHelpersTestSubASTNode1
+    child2: LegacyPAHelpersTestSubASTNode3
 
 
 @dataclass
-class PAHelpersTestSubASTNode3(ASTNode):
+class LegacyPAHelpersTestSubASTNode3(ASTNode):
     prop: str
-    child: PAHelpersTestSubASTNode1 | PAHelpersTestSubASTNode2
+    child: LegacyPAHelpersTestSubASTNode1 | LegacyPAHelpersTestSubASTNode2
 
 
 def test_is_union() -> None:
@@ -117,9 +117,9 @@ def test_is_sequence() -> None:
 
 def test_is_child_node() -> None:
     assert is_child_node(ASTNode)
-    assert is_child_node(PAHelpersTestSubASTNode1)
-    assert is_child_node(ASTNode | PAHelpersTestSubASTNode1)
-    assert is_child_node(Union[ASTNode, PAHelpersTestSubASTNode1])
+    assert is_child_node(LegacyPAHelpersTestSubASTNode1)
+    assert is_child_node(ASTNode | LegacyPAHelpersTestSubASTNode1)
+    assert is_child_node(Union[ASTNode, LegacyPAHelpersTestSubASTNode1])
     assert is_child_node(list[ASTNode])
     assert is_child_node(list[ASTNode] | ASTNode)
     assert is_child_node(tuple[ASTNode])
@@ -152,9 +152,9 @@ def test_is_child_node() -> None:
 
 def test_is_child_node_strict() -> None:
     assert is_child_node(ASTNode, strict=True)
-    assert is_child_node(PAHelpersTestSubASTNode1, strict=True)
-    assert is_child_node(ASTNode | PAHelpersTestSubASTNode1, strict=True)
-    assert is_child_node(Union[ASTNode, PAHelpersTestSubASTNode1], strict=True)
+    assert is_child_node(LegacyPAHelpersTestSubASTNode1, strict=True)
+    assert is_child_node(ASTNode | LegacyPAHelpersTestSubASTNode1, strict=True)
+    assert is_child_node(Union[ASTNode, LegacyPAHelpersTestSubASTNode1], strict=True)
     assert is_child_node(list[ASTNode], strict=True)
     assert is_child_node(list[ASTNode] | ASTNode, strict=True)
     assert is_child_node(tuple[ASTNode], strict=True)
@@ -187,9 +187,9 @@ def test_is_child_node_strict() -> None:
 
 def test_has_node_in_type() -> None:
     assert has_node_in_type(ASTNode)
-    assert has_node_in_type(PAHelpersTestSubASTNode1)
-    assert has_node_in_type(ASTNode | PAHelpersTestSubASTNode1)
-    assert has_node_in_type(Union[ASTNode, PAHelpersTestSubASTNode1])
+    assert has_node_in_type(LegacyPAHelpersTestSubASTNode1)
+    assert has_node_in_type(ASTNode | LegacyPAHelpersTestSubASTNode1)
+    assert has_node_in_type(Union[ASTNode, LegacyPAHelpersTestSubASTNode1])
     assert has_node_in_type(list[ASTNode])
     assert has_node_in_type(list[ASTNode] | ASTNode)
     assert has_node_in_type(tuple[ASTNode])
@@ -225,7 +225,7 @@ def test_get_ast_node_child_fields() -> None:
 
     field_name_to_type_info = {
         f.name: type_info
-        for f, type_info in get_ast_node_child_fields(PAHelpersTestSubASTNode1).items()
+        for f, type_info in get_ast_node_child_fields(LegacyPAHelpersTestSubASTNode1).items()
     }
     assert list(field_name_to_type_info.keys()) == [
         "child",
@@ -239,7 +239,7 @@ def test_get_ast_node_child_fields() -> None:
 
     field_name_to_type_info = {
         f.name: type_info
-        for f, type_info in get_ast_node_child_fields(PAHelpersTestSubASTNode2).items()
+        for f, type_info in get_ast_node_child_fields(LegacyPAHelpersTestSubASTNode2).items()
     }
     assert list(field_name_to_type_info.keys()) == [
         "child1",
@@ -247,13 +247,13 @@ def test_get_ast_node_child_fields() -> None:
     ]
 
     assert field_name_to_type_info["child1"].sequence_type is None
-    assert field_name_to_type_info["child1"].types == (PAHelpersTestSubASTNode1,)
+    assert field_name_to_type_info["child1"].types == (LegacyPAHelpersTestSubASTNode1,)
     assert field_name_to_type_info["child2"].sequence_type is None
-    assert field_name_to_type_info["child2"].types == (PAHelpersTestSubASTNode3,)
+    assert field_name_to_type_info["child2"].types == (LegacyPAHelpersTestSubASTNode3,)
 
     field_name_to_type_info = {
         f.name: type_info
-        for f, type_info in get_ast_node_child_fields(PAHelpersTestSubASTNode3).items()
+        for f, type_info in get_ast_node_child_fields(LegacyPAHelpersTestSubASTNode3).items()
     }
 
     assert list(field_name_to_type_info.keys()) == [
@@ -262,8 +262,8 @@ def test_get_ast_node_child_fields() -> None:
 
     assert field_name_to_type_info["child"].sequence_type is None
     assert field_name_to_type_info["child"].types == (
-        PAHelpersTestSubASTNode1,
-        PAHelpersTestSubASTNode2,
+        LegacyPAHelpersTestSubASTNode1,
+        LegacyPAHelpersTestSubASTNode2,
     )
 
 
@@ -275,7 +275,9 @@ def test_get_ast_node_properties() -> None:
         "id_collision_with",
         "origin",
     }
-    assert set([f.name for f in get_ast_node_properties(PAHelpersTestSubASTNode1).keys()]) == {
+    assert set(
+        [f.name for f in get_ast_node_properties(LegacyPAHelpersTestSubASTNode1).keys()]
+    ) == {
         "id",
         "content_id",
         "original_id",

@@ -3,118 +3,160 @@ from __future__ import annotations
 import enum
 import hashlib
 import logging
-import typing as t
+import sys
 import weakref
-from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Generator, Iterable
-from dataclasses import Field as DataClassField
-from dataclasses import InitVar, dataclass, field, fields, replace
-from inspect import getmembers, getmro, isfunction
-from operator import itemgetter
+from dataclasses import InitVar, dataclass, field, replace
+from inspect import getmro
+from typing import TYPE_CHECKING, Any, Callable, Deque, Mapping, NamedTuple, Sequence, TypeVar, cast
 
 from rich.markup import escape
 from rich.tree import Tree
 
-from .error import (
-    ASTNodeDuplicateChildrenError,
-    ASTNodeIDCollisionError,
-    ASTNodeParentCollisionError,
-    ASTNodeRegistryCollisionError,
-    ASTNodeReplaceError,
-    ASTNodeReplaceWithError,
-    ASTTransformError,
+from . import config
+from .codegen import (
+    gen_get_child_nodes_func,
+    gen_get_child_nodes_with_field_func,
+    gen_get_properties_func,
+    gen_iter_child_fields_func,
 )
-from .helpers import ChildFieldTypeInfo, get_ast_node_child_fields, get_ast_node_properties
-from .origin import Origin
+from .error import InvalidTypes
+from .origin import NO_ORIGIN, Origin
 from .serialize import TYPE_KEY, DataClassSerializeMixin
+from .typing import Field, FieldTypeInfo, check_annotations, is_instance, process_node_fields
+
+if TYPE_CHECKING:
+    from .match.xpath import ASTXpath
+    from .tree import Tree as PyOakTree
+    from .visitor import ASTVisitor
+
+_dataclass_extra_args: dict[str, bool] = {}
+if sys.version_info >= (3, 11):
+    # We rely on weakref slot, which is only available in py3.11+ for dataclasses
+    # Also slots are only possible with mashumaro supporting SerializableType with slots
+    from mashumaro.types import SerializableType
+
+    if hasattr(SerializableType, "__slots__"):
+        _dataclass_extra_args = dict(slots=True, weakref_slot=True)
 
 logger = logging.getLogger(__name__)
 
-TRACE_LOGGING = False
 
-# to make mypy happy
-Field = DataClassField[t.Any]
+_VRT = TypeVar("_VRT")
 
-VisitorReturnType = t.TypeVar("VisitorReturnType")
 
-ChildIndex = int
+# A sentinel object to detect if a parameter is supplied or not.
+# Use a subclass of str to make typing happy.
+class _UNSET_ID_TYPE(str):
+    pass
 
-UNSET_ID = "~~~UNSET~~~"  # Hopefully no one will ever use this as an ID
-CONTENT_ID_FIELD = "_content_id"
+
+_UNSET_ID = _UNSET_ID_TYPE()
+
+
+# Alternative implementations of dunder methods
+def _hash_fn(node: ASTNode) -> int:
+    return hash(node.id)
+
+
+def _eq_fn(self: ASTNode, other: ASTNode) -> bool:
+    # Other typed as ASTNode to make mypy happy
+    if other.__class__ is self.__class__:
+        return self.content_id == other.content_id and self.origin == other.origin
+
+    raise NotImplementedError
+
 
 # Hack to make dataclasses InitVar work with future annotations
 # See https://stackoverflow.com/questions/70400639/how-do-i-get-python-dataclass-initvar-fields-to-work-with-typing-get-type-hints
 InitVar.__call__ = lambda *args: None  # type: ignore
+
+# Cached mappings of ASTNode subclasses to their properties and child fields
+_TYPE_TO_ALL_FIELDS: dict[type[ASTNode], Mapping[Field, FieldTypeInfo]] = {}
+_TYPE_TO_CHILD_FIELDS: dict[type[ASTNode], Mapping[Field, FieldTypeInfo]] = {}
+_TYPE_TO_PROPS: dict[type[ASTNode], Mapping[Field, FieldTypeInfo]] = {}
+
+
+def _populate_type_dicts(cls: type[ASTNode]) -> None:
+    """Returns a tuple of all fields of the given class."""
+    _TYPE_TO_CHILD_FIELDS[cls], _TYPE_TO_PROPS[cls] = process_node_fields(cls, ASTNode)
+
+    _TYPE_TO_ALL_FIELDS[cls] = {
+        **_TYPE_TO_CHILD_FIELDS[cls],
+        **_TYPE_TO_PROPS[cls],
+    }
+
+
+def _get_cls_all_fields(cls: type[ASTNode]) -> Mapping[Field, FieldTypeInfo]:
+    """Returns a tuple of all fields of the given class."""
+    if cls not in _TYPE_TO_ALL_FIELDS:
+        _populate_type_dicts(cls)
+
+    return _TYPE_TO_ALL_FIELDS[cls]
+
+
+def _get_cls_child_fields(cls: type[ASTNode]) -> Mapping[Field, FieldTypeInfo]:
+    """Returns a tuple of all child fields of the given class.
+
+    Raises:
+        InvalidFieldTypes: If the class has fields with mixed ASTNode subclasses and regular types or
+            unsupported child fileds types (e.g. mutable collections of ASTNode's).
+    """
+    if cls not in _TYPE_TO_CHILD_FIELDS:
+        _populate_type_dicts(cls)
+
+    return _TYPE_TO_CHILD_FIELDS[cls]
+
+
+def _get_cls_props(cls: type[ASTNode]) -> Mapping[Field, FieldTypeInfo]:
+    """Returns a tuple of all properties of the given class.
+
+    Raises:
+        InvalidFieldTypes: If the class has fields with mixed ASTNode subclasses and regular types or
+            unsupported child fileds types (e.g. mutable collections of ASTNode's).
+    """
+    if cls not in _TYPE_TO_PROPS:
+        _populate_type_dicts(cls)
+
+    return _TYPE_TO_PROPS[cls]
+
+
+def _check_runtime_types(node: ASTNode, type_map: Mapping[Field, FieldTypeInfo]) -> Sequence[Field]:
+    incorrect_fields: list[Field] = []
+
+    for f, type_info in type_map.items():
+        val = getattr(node, f.name)
+        if not is_instance(val, type_info.resolved_type):
+            incorrect_fields.append(f)
+
+    return incorrect_fields
+
+
+NODE_REGISTRY: weakref.WeakValueDictionary[str, ASTNode] = weakref.WeakValueDictionary()
+"""Registry of all node objects."""
 
 
 def _get_next_unique_id(id_: str) -> str:
     """Return a unique ID."""
     i = 1
     original_id = id_
-    while ASTNode._nodes.get(id_) is not None:
+    while NODE_REGISTRY.get(id_) is not None:
         id_ = f"{original_id}_{i}"
         i += 1
 
     return id_
 
 
-def _is_skip_field(
-    field: Field,
-    skip_id: bool,
-    skip_origin: bool,
-    skip_original_id: bool,
-    skip_id_collision_with: bool,
-    skip_hidden: bool,
-    skip_non_compare: bool,
-    skip_non_init: bool,
-) -> bool:
-    """Check if a field should be skipped."""
-    # Skip id
-    if (field.name == "id" or field.name == "content_id") and skip_id:
-        return True
-
-    # Skip origin
-    if field.name == "origin" and skip_origin:
-        return True
-
-    # Skip original id
-    if field.name == "original_id" and skip_original_id:
-        return True
-
-    # Skip id collision with
-    if field.name == "id_collision_with" and skip_id_collision_with:
-        return True
-
-    # Skip hidden fields
-    if field.name.startswith("_") and skip_hidden:
-        return True
-
-    # Skip non-comparable fields
-    if not field.compare and skip_non_compare:
-        return True
-
-    # Skip non-init fields
-    if not field.init and skip_non_init:
-        return True
-
-    return False
+# Named Tuple for tree traversal functions
+class NodeTraversalInfo(NamedTuple):
+    node: ASTNode
+    parent: ASTNode
+    field: Field
+    findex: int | None = None
 
 
 AST_SERIALIZE_DIALECT_KEY = "ast_serialize_dialect"
-
-
-def _set_xpath(node: ASTNode, parent_xpath: str) -> None:
-    """Set the xpath for the subtree."""
-    if node.parent_field is None:
-        raise RuntimeError("Parent field is not set in AST Node")
-
-    xpath = f"{parent_xpath}/@{node.parent_field.name}[{node.parent_index or '0'}]{node.__class__.__name__}"
-
-    object.__setattr__(node, "_xpath", xpath)
-
-    for child in node.get_child_nodes():
-        _set_xpath(child, xpath)
 
 
 class ASTSerializationDialects(enum.Enum):
@@ -122,253 +164,179 @@ class ASTSerializationDialects(enum.Enum):
     AST_TEST = enum.auto()
 
 
-@dataclass
+@dataclass(frozen=True, **_dataclass_extra_args)
 class ASTNode(DataClassSerializeMixin):
     """A base class for all AST Node classes.
 
     Provides the following functions:
         - Maintains a weakref dictionary of all nodes, accessible through the class methods `get` and `get_any`
-        - Maintains a parent-child relationship between nodes
-        - Methods for replacing attributes or whole nodes
         - Various tree walking methods
         - Visitor API (accept method)
         - Serialization & deserialization
         - rich console API support (for printing)
 
     Notes:
-        - Subclasses must be dataclasses
-        - Only fields with subclasses of ASTNode or tuples/lists of ASTNode subclasses are considered children
-
-    Raises:
-        ASTNodeError: If there are children with a different parent alredy assigned (every AST node can only have one parent)
-
+        - Subclasses must be frozen dataclasses
+        - Subclasses may be slotted, but this would prevent using multiple inheritance
+        - Fields typed as union of subclasses of ASTNode or None as well as tuples of ASTNode subclasses
+            are considered children. All other types that have ASTNode subclasses in signature
+            will trigger an error.
     """
 
-    _nodes: t.ClassVar[weakref.WeakValueDictionary[str, ASTNode]] = weakref.WeakValueDictionary()
-    """Registry of all node objects that are considered "attached"."""
+    id: str = field(default=_UNSET_ID, init=False, compare=False)
+    """The unique ID of this node. It will be auto-generated based on the
+    node's properties and origin. Uniqueness is ensured for all nodes in the
+    registry, thus as long as an identical node is in memory, a new node will
+    get a different ID.
 
-    _props: t.ClassVar[t.Mapping[str, tuple[Field, t.Type[t.Any]]] | None] = None
-    """Mapping of field names to field instances & resolved types that are considered properties
-    (i.e. not children). This mapping is determined statically at based only on field type
-    annotations.
+    Two nodes with the same "content" (i.e. properties and children)
+    but generated with a different origin will have get different IDs.
 
-    Most methods check whether a field is a property or not by checking instances at runtime
+    For a stable (but non-unique) ID based purely on the node's content,
+    use the `content_id` property.
 
-    """
-
-    _child_fields: t.ClassVar[t.Mapping[str, tuple[Field, ChildFieldTypeInfo]] | None] = None
-    """"Mapping of field names to field instances & resolved types that are considered children.
-    This mapping is determined statically at based only on field type annotations.
-
-    Most methods check whether a field is a child or not by checking instances at runtime
-
-    """
-
-    original_id: str | None = field(
-        default=None,
-        compare=False,
-        kw_only=True,
-    )
-    """The "original" ID of this node. Set automatically, DO NOT SET MANUALLY.
-
-    - If the node was duplicated for another node, it will be the original ID.
-    - If the node is a replacement (replace_with), it will be the original ID of the node
-    before it was used for replacement.
-
-    None otherwise.
-
-    """
-
-    id_collision_with: str | None = field(
-        default=None,
-        compare=False,
-        kw_only=True,
-    )
-    """An ID of attached node whose Id was the same when this node was created (with
-    ensure_unique_id option) or None if there was no collision.
-
-    Set automatically, DO NOT SET MANUALLY.
-
-    """
-
-    origin: Origin = field(kw_only=True)
-    """The origin of this node.
-
-    Provides information of the source (such as text file) and it's path, as well as position within
-    the source (e.g. char index)
-
-    """
-
-    id: str = field(default=UNSET_ID, kw_only=True, compare=False)
-    """The unique ID of this node. If not set in the constructor, it will be auto-generated based on
-    the node's properties and origin.
-
-    This means that two nodes with the same "content" (i.e. properties and childre)
-    but generated from different sources will have different IDs.
-
-    For a stable ID based purely on the node's content, use the `content_id` property.
-
+    Note:
+        Although ID may be provided manually, it is not recommended to do so.
+        Instead use properties to store natural (e.g. source system) identifiers of the node.
     """
 
     content_id: str = field(
-        default=UNSET_ID,
+        default=_UNSET_ID,
         init=False,
         compare=False,
     )
-    """The ID of this node based on it's content (i.e. properties and children).
+    """The ID of this node based on it's content (i.e. properties and
+    children).
 
     Unlike the `id` property, this ID is stable and will be the same for two nodes
-    with the same content, regardless of their origin.
+    with the same content, regardless of their origin or existence of multiple
+    copies in memory.
 
     Naturally, this id can't be used to identify a node in the registry, since
     it is by definition non-unique.
-
     """
 
-    ensure_unique_id: InitVar[bool] = field(default=False, kw_only=True)
-    """When set to True, if a new node being created has non-unique ID an ASTNodeIDCollisionError
-    exception is raised."""
+    origin: Origin = field(default=NO_ORIGIN, kw_only=True)
+    """The origin of this node.
 
-    create_as_duplicate: InitVar[bool] = field(default=False, kw_only=True)
-    """When set to True, if node collision registered, it is recorded as node duplication, not id
-    collision. This is similar to getting the node from the registry and calling `duplicate` on it.
-
-    This overrides `ensure_unique_id`.
-
+    Provides information of the source (such as text file) and it's
+    path, as well as position within the source (e.g. char index)
     """
 
-    create_detached: InitVar[bool] = field(default=False, kw_only=True)
-    """When set to True, a node is not added to the registry upon creation. Nodes passed as children
-    are not attached to the newly created node (will not have their parent set to the new node id)
-    and id is not checked for collisions (id_collision_with, original_id are never set / ignored).
+    def __post_init__(self) -> None:
+        if config.RUNTIME_TYPE_CHECK:
+            incorrect_fields = _check_runtime_types(self, _get_cls_all_fields(self.__class__))
 
-    This has the same effect as creating a normal node and then calling
-    `detach_self` on it. But unlike the `detach_self` method, this option
-    allows creating a node with an existing ID from the registry, and then
-    using it as a replacement for attached node with the same ID.
+            if incorrect_fields:
+                raise InvalidTypes(incorrect_fields)
 
-    This is used as part of the transform visitor machinery when an
-    attached subtrees is passed.
+        # Calculate ID's
 
-    """
+        # Build common data for content_id & id
+        cid_data = ""
 
-    def __post_init__(
-        self,
-        ensure_unique_id: bool,
-        create_as_duplicate: bool,
-        create_detached: bool,
-    ) -> None:
-        # First ensure all children are unique. This will raise an error if not
-        self._check_unique_children()
+        # Property values are encoded in the same way for both id's
+        for val, f in sorted(
+            self.get_properties(
+                skip_id=True,
+                skip_origin=True,
+                skip_content_id=True,
+                skip_non_compare=True,
+            ),
+            key=lambda x: x[1].name,
+        ):
+            cid_data += f":{f.name}="
+            cid_data += f"{type(val)}({val!s})"
 
-        # Calculate ID
-        new_id: str
-        id_collision_with: str | None = None
-        original_id: str | None = None
-        if self.id == UNSET_ID:
-            hasher = hashlib.sha256()
-            hasher.update(self.__class__.__name__.encode("utf-8"))
-            hasher.update(f":{self.origin.fqn}".encode("utf-8"))
-            for val, f in sorted(
-                self.get_properties(skip_non_compare=False), key=lambda x: x[1].name
-            ):
-                hasher.update(f":{f.name}=".encode("utf-8"))
-                hasher.update(str(val).encode("utf-8"))
+        # Full ID must include origin's (current node and children)
+        id_data = f"{self.__class__.__name__}@{self.origin.fqn}{cid_data}"
+        # Content ID - just use class
+        cid_data = self.__class__.__name__ + cid_data
 
-            for c, f, i in sorted(
-                self.get_child_nodes_with_field(), key=lambda x: (x[1].name, x[2] or -1)
-            ):
-                i = i or -1
-                hasher.update(f":{f.name}[{i}]=".encode("utf-8"))
-                hasher.update(f"{c.id}".encode("utf-8"))
+        for c, f, i in sorted(
+            self.get_child_nodes_with_field(), key=lambda x: (x[1].name, x[2] or -1)
+        ):
+            resolved_index = i or -1
+            cid_data += f":{f.name}[{resolved_index}]="
+            cid_data += f"{c.content_id}"
+            id_data += f":{f.name}[{resolved_index}]="
+            id_data += f"{c.content_id}@{c.origin.fqn}"
 
-            new_id = hasher.hexdigest()
-        else:
-            new_id = self.id
+        # Assign content_id
+        object.__setattr__(
+            self,
+            "content_id",
+            hashlib.blake2b(
+                cid_data.encode("utf-8"), digest_size=config.ID_DIGEST_SIZE
+            ).hexdigest(),
+        )
 
-        if not create_detached:
-            if (existing_node := ASTNode._nodes.get(new_id)) is not None:
-                # Node with the same ID already exists
-                if not ensure_unique_id or create_as_duplicate:
-                    # We are ok if this is a duplicate node (contains the same data) but want to make sure that the ID is unique
+        # Generate ID
+        new_id = hashlib.blake2b(
+            id_data.encode("utf-8"), digest_size=config.ID_DIGEST_SIZE
+        ).hexdigest()
 
-                    if not create_as_duplicate:
-                        id_collision_with = new_id
-                    else:
-                        original_id = new_id
+        if existing_node := NODE_REGISTRY.get(new_id):
+            # Node with the same ID already exists
+            # This may mean two things:
+            # 1. The same node (equality wise) is already in the registry
+            # 2. Hash collision
+            # For the latter case, we won't to rehash with a longer digest
+            # to better preserve stable IDs. This is due to the fact
+            # that the simple counting approach used in _get_next_unique_id
+            # will depend on the order and number of collided nodes, thus
+            # prone to more fluctuations based on the order of insertion.
 
-                    new_id = _get_next_unique_id(new_id)
-                else:
-                    # Check and register in global registry
-                    raise ASTNodeIDCollisionError(existing_node, self.__class__)
+            digest_increment = 1
+            while existing_node is not None and existing_node != self:
+                new_id = hashlib.blake2b(
+                    id_data.encode("utf-8"),
+                    # Do not bother to check digest is within allowed size
+                    # since it allmost impossible to run out of digest size
+                    digest_size=config.ID_DIGEST_SIZE + digest_increment,
+                ).hexdigest()
 
-            # self.original_id & self.id_collision_with are supposed to be coming
-            # from deserialization (user should not set them manually).
-            # We need to handle various cases:
-            if self.original_id is not None:
-                # If node was a duplicate before serialization, we should
-                # force treat it as a duplicate after deserialization
-                original_id = self.original_id
+                existing_node = NODE_REGISTRY.get(new_id)
+                digest_increment += 1
 
-                if id_collision_with is not None:
-                    # If deserializaed node collided with some node
-                    # it may mean two things:
-                    # 1. It collided with another node that was a duplicate from the same original node
-                    # 2. It collided with another node that was not a duplicate which unfortunately
-                    #    used the ID matching the serialized node (should be extremely rare)
-                    if id_collision_with == self.original_id or (
-                        (collided := ASTNode._nodes.get(id_collision_with)) is not None
-                        and collided.original_id == self.original_id
-                    ):
-                        # Case 1 - we should treat it as a duplicate
-                        # Recalculate ID from the original base and
-                        # reset collision information
-                        new_id = _get_next_unique_id(self.original_id)
-                        id_collision_with = None
+            if existing_node is not None:
+                # By now this is only possible if we are dealing with duplicate nodes
+                new_id = _get_next_unique_id(new_id)
 
-            if self.id_collision_with is not None:
-                # If a node had a collision with another node before serialization
-                # we should use the same collision ID after deserialization
-
-                if id_collision_with is not None:
-                    # This means that the node collided after deserialization,
-                    # it can't be the original id since this node was serialized with
-                    # a unique ID... so again, same 2 cases as above
-                    if (
-                        collided := ASTNode._nodes.get(id_collision_with)
-                    ) is not None and collided.original_id == self.id_collision_with:
-                        # Case 1 Recalculate ID from the original base
-                        new_id = _get_next_unique_id(self.id_collision_with)
-
-                id_collision_with = self.id_collision_with
-
+        # Assign ID
         object.__setattr__(self, "id", new_id)
-        object.__setattr__(self, "id_collision_with", id_collision_with)
-        object.__setattr__(self, "original_id", original_id)
 
-        # Set parent related field & xpath to None
-        self._clear_parent()
+        # Register in the registry
+        NODE_REGISTRY[new_id] = self
 
-        if not create_detached:
-            # Besides attaching oneself to the registry and assigning parent to children
-            # It is possible that some children has been previously dropped (detached)
-            # from the registry. We need to re-attach them which will also check for collisions
-            self._attach(operation="create")
+    @classmethod
+    def _deserialize(cls, value: dict[str, Any]) -> ASTNode:
+        # Id must exist in the serialized data, otherwise
+        # it is a corrupt data
+        existing_node = NODE_REGISTRY.get(value["id"])
 
-        self._set_content_id()
+        # If >1 node was serialized with the same ID
+        # it must have been the same object in memory
+        # thus we want to deserialize it as the same object
+        if existing_node is not None:
+            return existing_node
 
-    def _clear_parent(self) -> None:
-        object.__setattr__(self, "_parent_id", None)
-        object.__setattr__(self, "_parent_field", None)
-        object.__setattr__(self, "_parent_index", None)
-        object.__setattr__(self, "_xpath", None)
+        # Otherwise, we need to create a new node
+        new_obj = super()._deserialize(value)
 
-    def _set_parent(self, parent: ASTNode, field: Field, index: int | None) -> None:
-        object.__setattr__(self, "_parent_id", parent.id)
-        object.__setattr__(self, "_parent_field", field)
-        object.__setattr__(self, "_parent_index", index)
+        # If the node was serialized with ID that had collision
+        # After recreating the node, it may not have the collision
+        # yet and thus will have a different ID. We need to force
+        # the ID to be the same as the serialized one and replace
+        # the node in the registry
+        if new_obj.id != value["id"]:
+            NODE_REGISTRY.pop(new_obj.id)
+            object.__setattr__(new_obj, "id", value["id"])
+            NODE_REGISTRY[value["id"]] = new_obj
 
-    def __post_serialize__(self, d: dict[str, t.Any]) -> dict[str, t.Any]:
+        return new_obj
+
+    def __post_serialize__(self, d: dict[str, Any]) -> dict[str, Any]:
         # Run first, otherwise _children will be dropped from the output
         out = super().__post_serialize__(d)
 
@@ -377,7 +345,7 @@ class ASTNode(DataClassSerializeMixin):
             == ASTSerializationDialects.AST_EXPLORER
         ):
             out["_children"] = []
-            out["_children"].extend([f.name for f in fields(self) if self._is_field_child(f)])
+            out["_children"].extend([f.name for f in _get_cls_child_fields(self.__class__)])
 
         if (
             self._get_serialization_options().get(AST_SERIALIZE_DIALECT_KEY)
@@ -391,167 +359,9 @@ class ASTNode(DataClassSerializeMixin):
 
         return out
 
-    def _set_content_id(self) -> None:
-        """Set the ID of this node based on its content.
-
-        Unlike automatic node ids, these do not include origin information, hidden & non-compare
-        fields and hence by definition represent the content of the node.
-
-        """
-        hasher = hashlib.sha256()
-        hasher.update(self.__class__.__name__.encode("utf-8"))
-        for val, f in sorted(
-            self.get_properties(
-                skip_id=True,
-                skip_origin=True,
-                skip_original_id=True,
-                skip_id_collision_with=True,
-                skip_hidden=True,
-                skip_non_compare=True,
-            ),
-            key=lambda x: x[1].name,
-        ):
-            hasher.update(f":{f.name}=".encode("utf-8"))
-            hasher.update(str(val).encode("utf-8"))
-
-        for c, f, i in sorted(
-            self.get_child_nodes_with_field(), key=lambda x: (x[1].name, x[2] or -1)
-        ):
-            resolved_index = i or -1
-            hasher.update(f":{f.name}[{resolved_index}]=".encode("utf-8"))
-            hasher.update(f"{getattr(c, 'content_id', '')}".encode("utf-8"))
-
-        object.__setattr__(self, "content_id", hasher.hexdigest())
-
-    def _reset_content_id(self) -> None:
-        """Recursively reset the content_id of this node and all its parents."""
-        node: ASTNode | None = self
-        while node is not None:
-            node._set_content_id()
-            node = node.parent
-
-    def _check_unique_children(self) -> None:
-        seen = set()
-        last_field_name = ""
-        last_index = None
-        for c, f, i in self.get_child_nodes_with_field():
-            if c.id in seen:
-                raise ASTNodeDuplicateChildrenError(
-                    c,
-                    last_field_name=last_field_name,
-                    last_index=last_index,
-                    new_field_name=f.name,
-                    new_index=i,
-                )
-            last_field_name = f.name
-            last_index = i
-            seen.add(c.id)
-
-    def _attach_inner(
-        self, operation: t.Literal["create", "attach", "replace"]
-    ) -> tuple[ASTNode, ASTNode] | None:
-        """Assigns parent to all child nodes, checking that they don't have a different parent that
-        is also in the registry (aka attached node).
-
-        Then attaches this node and all of it's detached children to the AST registry.
-
-        Returns:
-            tuple[ASTNode, ASTNode] | None: If there is a collision, returns the first
-            child node that collided and it's parent. None if the node was successfully attached
-
-        Raises:
-            ASTNodeRegistryCollisionError: If this node's id is already in the registry
-
-        """
-
-        # Check this id is not already in the registry
-        if self.id in ASTNode._nodes:
-            raise ASTNodeRegistryCollisionError(
-                new_node=self,
-                existing_node=ASTNode._nodes[self.id],
-                operation=operation,
-            )
-
-        # Walk through children, who may be either:
-        # * detached from registry entirely (result of a previsous `detach()` call)
-        # * or attached roots, meaning they were just created and have no parent
-        # If a child is attached to a different parent, it means an error has occured.
-        for c, f, i in self.get_child_nodes_with_field():
-            if c.detached:
-                # Means an already existing but previously detached node was re-added as a child to this new node
-                # Thus we need to recursively attach it
-                if (ret := c._attach_inner(operation=operation)) is not None:
-                    return ret
-            elif not c.is_attached_root:
-                # This means that a child node is already attached to a different parent
-                assert c.parent is not None
-                return (c, c.parent)
-
-            c._set_parent(self, f, i)
-
-        # Now we can safely attach this node to the registry
-        ASTNode._nodes[self.id] = self
-
-        return None
-
-    def _attach(self, operation: t.Literal["create", "attach", "replace"]) -> None:
-        if (ret := self._attach_inner(operation=operation)) is not None:
-            c, p = ret
-            raise ASTNodeParentCollisionError(self, c, p)
-
-    def _replace_child(
-        self, old: ASTNode, field: Field, index: int | None, new: ASTNode | None
-    ) -> None:
-        """Replaces an `old` child node in `field` at index `index` with a `new` one.
-
-        Assumes that the old node has already been detached and
-        the new one is not attached.
-
-        Args:
-            old (ASTNode): The old child node to replace
-            field (Field): The field in which to replace the child
-            index (int | None): The index of the child to replace if field is a list/tuple.
-            new (ASTNode): The new child node
-
-        """
-
-        if index is not None:
-            # This means the old node was a child in a list/tuple
-            orig_seq = getattr(self, field.name)
-
-            if new is not None:
-                setattr(
-                    self,
-                    field.name,
-                    type(orig_seq)([*orig_seq[:index], new, *orig_seq[index + 1 :]]),
-                )
-            else:
-                # Remove the old node
-                setattr(
-                    self,
-                    field.name,
-                    type(orig_seq)([*orig_seq[:index], *orig_seq[index + 1 :]]),
-                )
-
-                # Now shift all the indexes of the children after the removed one
-                for c in t.cast(t.Iterable[ASTNode], orig_seq[index + 1 :]):
-                    c._set_parent(self, field, t.cast(int, c.parent_index) - 1)
-        else:
-            # This means the old node was a child in a field
-            setattr(self, field.name, new)
-
-        if new is not None:
-            new._set_parent(self, field, index)
-
-        # Child changed, so we need to recompute the content id
-        # for this parent node and all its parents,
-        # but only if child content id changed
-        if new is None or old.content_id != new.content_id:
-            self._reset_content_id()
-
     @classmethod
     def get(
-        cls: t.Type[ASTNodeType],
+        cls: type[ASTNodeType],
         id: str,
         default: ASTNodeType | None = None,
         strict: bool = True,
@@ -563,21 +373,20 @@ class ASTNode(DataClassSerializeMixin):
             default (ASTNodeType | None, optional): The default value to return if the node is not found.
                 Defaults to None.
             strict (bool, optional): If True, only a node of this class type is returned.
-                Otherwise an instnace if any subclass is allowed. Defaults to True.
+                Otherwise an instnace of any subclass is allowed. Defaults to True.
 
         Returns:
             ASTNodeType | None: The node if found, otherwise the default value
-
         """
-        ret = ASTNode._nodes.get(id, default)
+        ret = NODE_REGISTRY.get(id)
         if ret is None:
-            return None
+            return default
         elif strict and not type(ret) == cls:
-            return None
+            return default
         elif not strict and not isinstance(ret, cls):
-            return None
+            return default
         else:
-            return t.cast(ASTNodeType, ret)
+            return cast(ASTNodeType, ret)
 
     @classmethod
     def get_any(cls, id: str, default: ASTNode | None = None) -> ASTNode | None:
@@ -590,478 +399,39 @@ class ASTNode(DataClassSerializeMixin):
 
         Returns:
             ASTNode | None: The node if found, otherwise the default value
-
         """
-        return ASTNode._nodes.get(id, default)
-
-    def attach(self) -> None:
-        """Attaches this node and all of it's detached children to the AST registry.
-
-        Raises:
-            ASTNodeRegistryCollisionError: If this node's or any of the subtree node id's
-                are already in the registry
-            ASTNodeParentCollisionError: If any of the subtree nodes are already
-                attached to a different parent
-
-        """
-        if not self.detached:
-            if TRACE_LOGGING:
-                logger.debug(f"Tried to attach an attached AST Node <{self.id}> to AST registry")
-            return
-
-        self._attach(operation="attach")
-
-    def detach(self, *, only_self: bool = False) -> bool:
-        """Removes this node and all of it's children (unless `only_self` is True) from the AST
-        registry.
-
-        Args:
-            only_self (bool, optional): If True, only this node will be removed from the registry. Defaults to False.
-
-        Returns:
-            bool: True if the node was successfully dropped, including if it was not found in the registry. False if it is a sub-tree of a registered node.
-
-        """
-        if self.detached:
-            if TRACE_LOGGING:
-                logger.debug(f"Tried to detach a detached AST Node <{self.id}> from AST registry")
-            return True
-
-        # Checking for parent, not for _parent (which is id) to see if it has a registered parent
-        if not self.is_attached_root:
-            if TRACE_LOGGING:
-                logger.debug(
-                    f"Tried to detach an attached sub-tree (i.e. has a parent) AST Node <{self.id}> from AST registry"
-                )
-            return False
-
-        # Walk through children and remove parent reference
-        # Although `self` will have object references in its attributes
-        # from the attached tree perspective, the children are free floating
-        # Unless we do this, we can have a situation after replace
-        # where a former child is not among `self.get_child_nodes()`
-        # but it's parent property still returns an actual object
-        for c in self.get_child_nodes():
-            c._clear_parent()
-
-            if not only_self:
-                c.detach()
-
-        ASTNode._nodes.pop(self.id)
-
-        return True
-
-    def detach_self(self) -> bool:
-        """Removes this node from the AST registry.
-
-        Returns:
-            bool: True if the node was successfully dropped, False if it was not found in the registry
-
-        """
-        return self.detach(only_self=True)
-
-    def replace(self: ASTNodeType, **changes: t.Any) -> ASTNodeType:
-        """This will create and return a new node with changes applied to it.
-
-        if the node was attached to the registry, it will be replaced in the
-        AST registry with the new one.
-
-        This works similarly to dataclasses.replace, but with some differences:
-        * This will update content_id of the node and all of it's parents if needed.
-        * It is not allowed to change the following attributes:
-            id, content_id, original_id, id_collision_with, fields with init=False.
-        * In addition to creating a new instance, it will also replace the node in the AST registry
-            and within it's parent if it has one.
-
-        Currently this function doesn't validate the types of the changes you pass in to be
-        compatible with the types of the fields you are trying to change. This may change in the future.
-
-        Args:
-            **changes: The changes to apply to the new node
-
-        Raises:
-            ASTNodeReplaceError: If you try to change the forbidden attributes or supply
-                non-existent attributes
-            ASTNodeParentCollisionError: If among changes you pass a new child with
-                a different parent assigned (same as init)
-            ASTNodeDuplicateChildrenError: same as init
-            ASTNodeRegistryCollisionError: same as init
-
-        """
-        fields_allowed_for_replace = set(
-            f.name
-            for f in fields(self)
-            if not _is_skip_field(
-                f,
-                skip_id=True,
-                skip_origin=False,
-                skip_original_id=True,
-                skip_id_collision_with=True,
-                skip_hidden=False,
-                skip_non_compare=False,
-                skip_non_init=True,
-            )
-        )
-
-        change_keys = set(changes.keys())
-
-        if not change_keys.issubset(fields_allowed_for_replace):
-            raise ASTNodeReplaceError(
-                node=self,
-                changes=changes,
-                error_keys=list(change_keys - fields_allowed_for_replace),
-            )
-
-        logger.debug(
-            f"Replacing attributes <{','.join(changes.keys())}> in an existing AST Node <{self.id}>"
-        )
-
-        # remember the parent
-        cur_parent = self.parent
-        cur_parent_field = self.parent_field
-        cur_parent_index = self.parent_index
-        if cur_parent is not None:
-            # If we have a parent, we need to clear it first,
-            # Otherwise the call to detach() will fail because detaching
-            # non-root nodes is not allowed. But this is a special case
-            self._clear_parent()
-
-        # First we need to detach all children, to make sure that those that are not part of
-        # `changes` will not stay incorrectly attached and maintain this parent id
-        if not self.detached:
-            self.detach_self()
-
-            was_attached = True
-        else:
-            was_attached = False
-
-        # Now we can safely create a new node. All old children will be re-attached alongside new ones
-        try:
-            ret = replace(
-                self,
-                create_detached=not was_attached,
-                original_id=None,  # Should not go to init, handled below
-                id_collision_with=None,  # Should not go to init, handled below
-                **changes,
-            )
-        except Exception as e:
-            # If something went wrong, we need to re-attach the node to the parent
-            # and back to the registry
-            if was_attached:
-                ASTNode._nodes[self.id] = self
-
-            if cur_parent is not None:
-                assert cur_parent_field is not None
-                self._set_parent(cur_parent, cur_parent_field, cur_parent_index)
-
-            raise e
-
-        if cur_parent is not None:
-            # If we had a parent, we need to replace this child with new one in it
-            # and re-attach the node to the parent
-            assert cur_parent_field is not None
-            cur_parent._replace_child(self, cur_parent_field, cur_parent_index, ret)
-
-        # We need to copy the original_id and id_collision_with
-        object.__setattr__(ret, "original_id", self.original_id)
-        object.__setattr__(ret, "id_collision_with", self.id_collision_with)
-        return ret
-
-    def replace_with(self: ASTNode, new: ASTNode | None) -> None:
-        """Attempts to replace this node with a new one. If the new node has a different parent of
-        if it's type does not match the type declaration of the parent node, the operation will
-        raise ASTNodeReplaceWithError.
-
-        Otherwise, the old node is detached and the new one is attached to the
-        same parent and registry, and it's ID is changed to the old node ID. It's
-        original ID is preserved in the `original_id` attribute.
-
-        Args:
-            new (ASTNode | None): The new node to replace this one with. If None,
-                this node will be detached from the tree and removed from parent,
-                but only if parent field type allows this (sequence or allows None).
-
-        Raises:
-            ASTNodeReplaceWithError: if replacement is not possible
-
-        """
-        if new and new.is_attached_subtree:
-            raise ASTNodeReplaceWithError(
-                f"Failed to replace AST Node <{self.id}> with <{new.id}> "
-                "because the new node has a parent already",
-                node=self,
-                new_node=new,
-            )
-
-        if self.parent is not None:
-            # It is a subtree
-
-            if (
-                self.parent_field is None
-                or (
-                    parent_field_type_info := self.parent.get_child_fields().get(
-                        self.parent_field.name
-                    )
-                )
-                is None
-            ):
-                raise RuntimeError(
-                    f"Failed to replace AST Node <{self.id}> with "
-                    f"<{new.id if new is not None else 'None'}> because "
-                    "the parent node does not have a parent field or field "
-                    "type info is missing. This is a bug, please report it."
-                )
-
-            # Check if the new node is of the same type as the parent expects
-            _, p_type = parent_field_type_info
-
-            if new is None:
-                if not p_type.is_optional and p_type.sequence_type is None:
-                    raise ASTNodeReplaceWithError(
-                        f"Failed to replace AST Node <{self.id}> with <None> "
-                        "because parent expects a non-optional node",
-                        node=self,
-                        new_node=new,
-                    )
-            else:
-                new_type = type(new)
-                if not any(issubclass(new_type, t) for t in p_type.types):
-                    raise ASTNodeReplaceWithError(
-                        f"Failed to replace AST Node <{self.id}> with <{new.id}> because parent "
-                        f"expects nodes of type: {', '.join([t.__name__ for t in p_type.types])}",
-                        node=self,
-                        new_node=new,
-                    )
-
-            # remember the parent
-            cur_parent = self.parent
-            cur_parent_field = self.parent_field
-            cur_parent_index = self.parent_index
-
-            # Clear the parent of the old node
-            self._clear_parent()
-
-            # Detach the old subtree
-            self.detach()
-
-            if new is not None:
-                if not new.detached:
-                    # Pop the new node from the registry, if it was there (with it's original ID)
-                    ASTNode._nodes.pop(new.id, None)
-
-                    new_was_attached = True
-                else:
-                    new_was_attached = False
-
-                # Change the ID of the new node to the old one, and store the old one in original_id
-                object.__setattr__(new, "original_id", new.id)
-                object.__setattr__(new, "id", self.id)
-
-                # Make sure the new one is attached with the new ID
-                try:
-                    new._attach("replace")
-                except Exception as e:
-                    # If we failed to the attach new node, re-attach the old one
-                    # and raise the exception
-
-                    assert cur_parent_field is not None
-                    self._set_parent(cur_parent, cur_parent_field, cur_parent_index)
-
-                    self._attach("replace")
-
-                    if new_was_attached:
-                        ASTNode._nodes[new.id] = new
-
-                    raise ASTNodeReplaceWithError(
-                        f"Failed to attach the new node while replacing AST Node <{self.id}>",
-                        node=self,
-                        new_node=new,
-                    ) from e
-
-            # If we had a parent, we need to replace this child with new one in it
-            # and re-attach the node to the parent
-            cur_parent._replace_child(self, cur_parent_field, cur_parent_index, new)
-        elif new is not None:
-            # It is a root or detached node, so we just need to flip ids
-            # and possibly attach the new one
-
-            # Detach the old subtree
-            if not self.detached:
-                self.detach()
-
-                was_attached = True
-            else:
-                was_attached = False
-
-            if not new.detached:
-                # Pop the new node from the registry, if it was there (with it's original ID)
-                ASTNode._nodes.pop(new.id, None)
-
-                new_was_attached = True
-            else:
-                new_was_attached = False
-
-            # Change the ID of the new node to the old one, and store the old one in original_id
-            object.__setattr__(new, "original_id", new.id)
-            object.__setattr__(new, "id", self.id)
-
-            # Make sure the new one is attached
-            try:
-                new._attach("replace")
-            except Exception as e:
-                # If we failed to the attach new node, re-attach the old one
-                # and raise the exception
-                if was_attached:
-                    self._attach("replace")
-
-                if new_was_attached:
-                    ASTNode._nodes[new.id] = new
-
-                raise ASTNodeReplaceWithError(
-                    f"Failed to attach the new node while replacing AST Node <{self.id}>",
-                    node=self,
-                    new_node=new,
-                ) from e
-        else:
-            # This is equivalent to detach
-            self.detach()
-
-    def duplicate(self: ASTNodeType, as_detached_clone: bool = False) -> ASTNodeType:
-        """Creates a new node with the same data as this node but a unique new id."""
-        logger.debug(f"Duplicating an existing AST Node <{self.id}>")
-
-        changes: dict[str, t.Any] = {}
-        for obj, f in self._iter_child_fields():
+        return NODE_REGISTRY.get(id, default)
+
+    def duplicate(self: ASTNodeType) -> ASTNodeType:
+        """Creates a full duplicate of the given node, recursively duplicating
+        all children."""
+        if config.TRACE_LOGGING:
+            logger.debug(f"Duplicating an existing AST Node <{self.id}>")
+
+        changes: dict[str, Any] = {}
+        for obj, f in self.iter_child_fields():
             if isinstance(obj, ASTNode):
-                changes[f.name] = obj.duplicate(as_detached_clone=as_detached_clone)
-            elif isinstance(obj, (list, tuple)):
-                changes[f.name] = type(obj)(
-                    [
-                        c.duplicate(as_detached_clone=as_detached_clone)
-                        if isinstance(c, ASTNode)
-                        else c
-                        for c in obj
-                    ]
-                )
+                changes[f.name] = obj.duplicate()
+            elif isinstance(obj, tuple):
+                changes[f.name] = tuple(c.duplicate() for c in obj)
 
-        ret = replace(
+        return replace(
             self,
-            create_detached=as_detached_clone,
-            original_id=None,  # Should not go to init, handled below
-            id_collision_with=None,  # Should not go to init, handled below,
             **changes,
         )
-        # We need to assign the original_id and copy id_collision_with
-        # But not parent - this is a new node
-        object.__setattr__(ret, "id_collision_with", self.id_collision_with)
-
-        if ret.id != self.id:
-            # If we duplicated a detached node, id will not change
-            # so we treat this as a recreation of a node with the same ID
-            object.__setattr__(ret, "original_id", self.id)
-        else:
-            object.__setattr__(ret, "original_id", self.original_id)
-
-        return ret
-
-    def calculate_xpath(self) -> bool:
-        """Calculates the xpath of this node and all its children.
-
-        This is a legacy method. The use of match.xpath module is preferred.
-
-        """
-        if not self.is_attached_root:
-            logger.debug("Cannot calculate xpath for a non-root node")
-            return False
-
-        # Calculate the xpath of this node (root)
-        xpath = f"/@root[0]{self.__class__.__name__}"
-
-        # Set the xpath of all children
-        for child in self.get_child_nodes():
-            _set_xpath(child, parent_xpath=xpath)
-
-        # Set the xpath of this node
-        object.__setattr__(self, "_xpath", xpath)
-
-        return True
 
     @property
-    def children(self) -> t.List[ASTNode]:
-        """Returns a static list with all child ASTNodes.
+    def children(self) -> Sequence[ASTNode]:
+        """Returns a static sequence with all child ASTNodes.
 
         Use `get_child_nodes` to iterate over
-
         """
         return list(self.get_child_nodes())
 
-    @property
-    def parent(self) -> ASTNode | None:
-        """Returns the parent node of this node or None if it is the root node."""
-        # Since we are dynamically assigning the parent fields
-        # we need to use getattr to make typing happy
-        parent_id = getattr(self, "_parent_id", None)
-        if parent_id is None:
-            return None
-        else:
-            return ASTNode.get_any(parent_id)
-
-    @property
-    def parent_field(self) -> Field | None:
-        """Returns the field that this node is assigned to in the parent node."""
-        # Since we are dynamically assigning the parent fields
-        # we need to use getattr to make typing happy
-        parent_field: Field | None = getattr(self, "_parent_field", None)
-        if parent_field is None:
-            return None
-        else:
-            return parent_field
-
-    @property
-    def parent_index(self) -> int | None:
-        """Returns the index of this node in the parent node's container field (list or tuple)."""
-        # Since we are dynamically assigning the parent fields
-        # we need to use getattr to make typing happy
-        parent_index: int | None = getattr(self, "_parent_index", None)
-        if parent_index is None:
-            return None
-        else:
-            return parent_index
-
-    @property
-    def xpath(self) -> str | None:
-        """Returns the last calculated xpath of this node.
-
-        This is the legacy xpath that may be removed in the future.
-        The recommended way of matching nodes by xpath is via the match.xpath module.
-
-        To calculate the xpath, use `calculate_xpath` or root node.
-
-        Returns None if xpath wasn't calculated.
-
-        """
-        # Since we are dynamically assigning the parent fields
-        # we need to use getattr to make typing happy
-        return t.cast(str | None, getattr(self, "_xpath", None))
-
-    @property
-    def detached(self) -> bool:
-        """Returns True if this node is detached from the AST registry."""
-        return ASTNode._nodes.get(self.id) is not self
-
-    @property
-    def is_attached_root(self) -> bool:
-        """Returns True if this node is attached and the root node."""
-        return self.parent is None and not self.detached
-
-    @property
-    def is_attached_subtree(self) -> bool:
-        """Returns True if this node is attached and has parent (not root)."""
-        return self.parent is not None and not self.detached
-
-    def accept(self, visitor: ASTVisitor[VisitorReturnType]) -> VisitorReturnType:
-        """Accepts a visitor by finding and calling a matching visitor method that should have a
-        name in a form of visit_{__class__.__name__} or generic_visit if it doesn't exist.
+    def accept(self, visitor: ASTVisitor[_VRT]) -> _VRT:
+        """Accepts a visitor by finding and calling a matching visitor method
+        that should have a name in a form of visit_{__class__.__name__} or
+        generic_visit if it doesn't exist.
 
         If the passed in visitor is a strict type, then visit method is matched by
         the exact type match. Otherise accept method walks the mro until it finds
@@ -1088,7 +458,6 @@ class ASTNode(DataClassSerializeMixin):
             >>> visitor = MyVisitor()
             >>> visitor.visit(node)
             "Hello World"
-
         """
         visitor_method = None
 
@@ -1106,95 +475,21 @@ class ASTNode(DataClassSerializeMixin):
 
         return visitor_method(self)
 
-    def get_depth(self, relative_to: ASTNode | None = None, check_ancestor: bool = True) -> int:
-        """Returns the depth of this node in the tree either up to root or up to `relative_to` node
-        (if it is the ancestor at all).
-
-        Args:
-            relative_to (ASTNode | None): The node to stop at. If None, the depth is calculated up to the root node.
-
-        Returns:
-            int: The depth of this node in the tree.
-
-        Raises:
-            ValueError: If `relative_to` is not an ancestor of this node.
-
-        """
-        if relative_to is not None and check_ancestor and not relative_to.is_ancestor(self):
-            raise ValueError("relative_to must be an ancestor of this node")
-
-        if self.parent is None:
-            return 0
-        elif relative_to is not None and self.parent == relative_to:
-            return 1
-        else:
-            return self.parent.get_depth(relative_to=relative_to, check_ancestor=False) + 1
-
-    def ancestors(self) -> t.Iterator[ASTNode]:
-        """Iterates over all ancestors of this node."""
-        parent = self.parent
-        while parent is not None:
-            yield parent
-            parent = parent.parent
-
-    def get_first_ancestor_of_type(
-        self,
-        ancestor_class: t.Type[ASTNodeType] | tuple[t.Type[ASTNodeType], ...],
-        *,
-        exact_type: bool = False,
-    ) -> ASTNodeType | None:
-        """Returns the first ancestor of this node that is an instance of `ancestor_class`. Or None
-        if no such ancestor exists.
-
-        Args:
-            ancestor_class (t.Type[ASTNodeType] | tuple[t.Type[ASTNodeType], ...]): The
-                ancestor class or tuple of classes to search for.
-            exact_type (bool, optional): Whether to search for exact type match,
-                or match any subclasses (isintance check). Defaults to False.
-
-        Returns:
-            ASTNodeType | None: The ancestor node or None if no such ancestor exists.
-
-        """
-        if not isinstance(ancestor_class, tuple):
-            ancestor_classes = t.cast(tuple[t.Type[ASTNodeType], ...], (ancestor_class,))
-        else:
-            ancestor_classes = ancestor_class
-
-        for ancestor in self.ancestors():
-            if exact_type and type(ancestor) in ancestor_classes:
-                return t.cast(ASTNodeType, ancestor)
-
-            if not exact_type and isinstance(ancestor, ancestor_classes):
-                return t.cast(ASTNodeType, ancestor)
-
-        return None
-
-    def is_ancestor(self, node: ASTNode) -> bool:
-        """Returns True if this node is an ancestor of `node`."""
-        if node.parent is None:
-            return False
-        elif node.parent == self:
-            return True
-        else:
-            return self.is_ancestor(node.parent)
-
-    def is_equal(self, other: t.Any) -> bool:
+    def is_equal(self, other: Any) -> bool:
         """Returns True if this node is equal to `other`.
 
-        Unlike `==`, this method only compares properties & children and ignores the origin, id,
-        parent, etc.
-
+        Unlike `==`, this method only compares properties & children and
+        ignores the origin and compares by content_id.
         """
-        if not isinstance(other, type(self)):
+        if type(other) is not type(self):
             return False
 
-        return self.content_id == other.content_id
+        return self.content_id == cast(ASTNode, other).content_id
 
-    def to_properties_dict(self) -> dict[str, t.Any]:
-        """Returns a dictionary of all node properties (not children), including only "content",
-        i.e. origin, id, origin_id, id_collision, parent_id and hidden attributes are not
-        included."""
+    def to_properties_dict(self) -> dict[str, Any]:
+        """Returns a dictionary of all node properties (not children),
+        including only "content", i.e. origin, id, origin_id, id_collision,
+        parent_id and hidden attributes are not included."""
         d = {}
 
         for v, f in self.get_properties():
@@ -1202,112 +497,103 @@ class ASTNode(DataClassSerializeMixin):
 
         return d
 
-    def _ensure_iterable(self, value: t.Any | None) -> t.Iterable[t.Any]:
-        if value is None:
-            return []
-        if isinstance(value, (list, tuple)):
-            return value
-        else:
-            # Dicts, sets are not are not traversed
-            return [value]
+    def to_tree(self) -> PyOakTree:
+        """Returns a pyoak.tree.Tree object with this node as root."""
 
-    def _is_field_child(self, field: Field) -> bool:
-        # fields that are not part of init can't be children
-        if not field.init:
-            return False
+        from .tree import Tree as PyOakTree
 
-        o = getattr(self, field.name)
+        return PyOakTree(self)
 
-        if o is None or (isinstance(o, (list, tuple)) and len(o) == 0):
-            return field.name in self.get_child_fields()
-
-        if isinstance(o, ASTNode):
-            return True
-        else:
-            for item in self._ensure_iterable(o):
-                if isinstance(item, ASTNode):
-                    return True
-
-        return False
-
-    def _iter_child_fields(
+    def iter_child_fields(
         self,
-    ) -> t.Iterable[tuple[ASTNode | t.Sequence[ASTNode] | None, Field]]:
-        for f in fields(self):
-            # Skip non-child fields
-            if not self._is_field_child(f):
-                continue
+    ) -> Iterable[tuple[ASTNode | tuple[ASTNode] | None, Field]]:
+        """Iterates over all child fields of this node, returning the child
+        field value as-is (whether it is None, a sequence or a child node) and
+        the field itself.
 
-            yield getattr(self, f.name), f
+        Returns:
+            Iterable[tuple[ASTNode | tuple[ASTNode] | None, Field]]:
+                An iterator of tuples of (child field value, field).
+        """
+
+        # Dynamicaly generate a specialized function for this class
+        gen_iter_child_fields_func(self.__class__, _get_cls_child_fields(self.__class__))
+
+        # At this point this will call a specialized function
+        yield from self.iter_child_fields()
 
     def dfs(
         self,
-        prune: t.Callable[[ASTNode], bool] | None = None,
-        filter: t.Callable[[ASTNode], bool] | None = None,
+        prune: Callable[[NodeTraversalInfo], bool] | None = None,
+        filter: Callable[[NodeTraversalInfo], bool] | None = None,
         bottom_up: bool = False,
-        skip_self: bool = False,
-    ) -> Generator[ASTNode, None, None]:
-        """Returns a generator object which visits all nodes in this tree in the DFS (Depth-first)
-        order.
+    ) -> Generator[NodeTraversalInfo, None, None]:
+        """Returns a generator object which yields all nodes in a tree, with
+        this node as root in the DFS (Depth-first) order. It doesn't yield the
+        node itself.
 
         Args:
-            prune (t.Callable[[ASTNode], bool] | None, optional): An optional function which if it returns True will prevent further decent into the children of this element.
-            filter (t.Callable[[ASTNode], bool] | None, optional): An optional function which if it returns False will prevent the element from being yielded, but won't interrupt the recursive decent/ascent.
+            prune (Callable[[NodeTraversalInfo], bool] | None, optional):
+                An optional function which if it returns True will prevent
+                further decent into the children of this element.
+            filter (Callable[[NodeTraversalInfo], bool] | None, optional):
+                An optional function which if it returns False will prevent
+                the element from being yielded, but won't interrupt the recursive decent/ascent.
             bottom_up (bool, optional): Enables bottom up traversal. Defaults to False.
-            skip_self (bool, optional): Doesn't yield self. Defaults to False.
 
         Yields:
-            Generator[ASTNode, None, None]: A generator object which visits all nodes in this tree in the DFS (Depth-first) order.
-
+            Generator[NodeTraversalInfo, None, None]:
+                A generator object which yields all sub-nodes in the DFS (Depth-first) order.
         """
-        build_queue: t.Deque[ASTNode] = deque([self])
-        yield_queue: t.Deque[ASTNode] = deque()
+        # We add "dummy" info, for type safety. It is not yielded anyway
+        build_stack: list[NodeTraversalInfo] = [NodeTraversalInfo(self, self, field(), None)]
+        yield_queue: Deque[NodeTraversalInfo] = deque()
 
-        while build_queue:
-            child = build_queue.popleft()
+        skip_self = True
+        while build_stack:
+            child_info = build_stack.pop()
 
             if not skip_self:
-                if filter is None or filter(child):
+                if filter is None or filter(child_info):
                     if bottom_up:
-                        yield_queue.appendleft(child)
+                        yield_queue.appendleft(child_info)
                     else:
-                        yield_queue.append(child)
+                        yield_queue.append(child_info)
 
-                if prune and prune(child):
+                if prune and prune(child_info):
                     continue
             else:
                 skip_self = False
 
-            # Walk through children
-            if bottom_up:
-                for c in child.get_child_nodes():
-                    build_queue.appendleft(c)
-            else:
-                for c in reversed(child.children):
-                    build_queue.appendleft(c)
+            children_info = list(child_info.node.get_child_nodes_with_field())
+            if not bottom_up:
+                children_info.reverse()
+
+            for c, f, i in children_info:
+                build_stack.append(NodeTraversalInfo(c, child_info.node, f, i))
 
         while yield_queue:
             yield yield_queue.popleft()
 
     def bfs(
         self,
-        prune: t.Callable[[ASTNode], bool] | None = None,
-        filter: t.Callable[[ASTNode], bool] | None = None,
-        skip_self: bool = False,
-    ) -> Generator[ASTNode, None, None]:
-        """Returns a generator object which visits all nodes in this tree in the BFS (Breadth-first)
-        order.
+        prune: Callable[[NodeTraversalInfo], bool] | None = None,
+        filter: Callable[[NodeTraversalInfo], bool] | None = None,
+    ) -> Generator[NodeTraversalInfo, None, None]:
+        """Returns a generator object which visits all nodes in this tree in
+        the BFS (Breadth-first) order.
 
         Args:
-            prune (t.Callable[[ASTNode], bool]): An optional function which if it returns True will prevent further decent into the children of this element.
-            filter (t.Callable[[ASTNode], bool]): An optional function which if it returns False will prevent the element from being yielded, but won't interrupt the recursive decent.
+            prune (Callable[[NodeTraversalInfo], bool]): An optional function which if it returns True will prevent further decent into the children of this element.
+            filter (Callable[[NodeTraversalInfo], bool]): An optional function which if it returns False will prevent the element from being yielded, but won't interrupt the recursive decent.
 
         Returns:
             the generator object.
-
         """
-        queue: t.Deque[ASTNode] = deque([self])
+        # We add "dummy" info, for type safety. It is not yielded anyway
+        queue: Deque[NodeTraversalInfo] = deque([NodeTraversalInfo(self, self, field(), None)])
 
+        skip_self = True
         while queue:
             child = queue.popleft()
 
@@ -1321,32 +607,36 @@ class ASTNode(DataClassSerializeMixin):
                 skip_self = False
 
             # Walk through children
-            queue.extend(child.get_child_nodes())
+            queue.extend(
+                NodeTraversalInfo(c, child.node, f, i)
+                for c, f, i in child.node.get_child_nodes_with_field()
+            )
 
     def gather(
         self,
-        obj_class: t.Type[ASTNodeType] | tuple[t.Type[ASTNodeType], ...],
+        obj_class: type[ASTNodeType] | tuple[type[ASTNodeType], ...],
         *,
         exact_type: bool = False,
-        extra_filter: t.Callable[[ASTNode], bool] | None = None,
-        prune: t.Callable[[ASTNode], bool] | None = None,
-        skip_self: bool = False,
+        extra_filter: Callable[[NodeTraversalInfo], bool] | None = None,
+        prune: Callable[[NodeTraversalInfo], bool] | None = None,
     ) -> Generator[ASTNodeType, None, None]:
-        """Shorthand for traversing the tree and gathering all instances of subclasses of
-        `obj_class` or exactly `obj_class` if `exact_type` is True.
+        """Shorthand for traversing the tree and gathering all instances of
+        subclasses of `obj_class` or exactly `obj_class` if `exact_type` is
+        True.
+
+        This function will not yield the node itself.
 
         Args:
-            obj_class (t.Type[ASTNodeType] | tuple[t.Type[ASTNodeType], ...]): any ASTNode subclass or Tuple of classes to gather.
+            obj_class (type[ASTNodeType] | tuple[type[ASTNodeType], ...]): any ASTNode subclass or Tuple of classes to gather.
             exact_type (bool, optional): Whether to only gather instances of `obj_class` and not its subclasses. Defaults to False.
-            extra_filter (t.Callable[[ASTNode], bool] | None, optional): An optional additional filter to apply when gathering. Defaults to None.
-            prune (t.Callable[[ASTNode], bool] | None, optional): Optional function to stop traversal. Defaults to None.
+            extra_filter (Callable[[NodeTraversalInfo], bool] | None, optional): An optional additional filter to apply when gathering. Defaults to None.
+            prune (Callable[[NodeTraversalInfo], bool] | None, optional): Optional function to stop traversal. Defaults to None.
             skip_self (bool, optional): Whether to skip the node that this method is called from. Defaults to False.
 
         Yields:
             Generator[ASTNodeType, None, None]: An iterator of `obj_class` instances.
-
         """
-        obj_classes: tuple[t.Type[ASTNodeType], ...]
+        obj_classes: tuple[type[ASTNodeType], ...]
         if not isinstance(obj_class, tuple):
             obj_classes = (obj_class,)
         else:
@@ -1354,150 +644,168 @@ class ASTNode(DataClassSerializeMixin):
 
         if not exact_type:
 
-            def filter_fn(obj: ASTNode) -> bool:
-                return isinstance(obj, obj_classes) and (extra_filter is None or extra_filter(obj))
+            def filter_fn(node_info: NodeTraversalInfo) -> bool:
+                return isinstance(node_info.node, obj_classes) and (
+                    extra_filter is None or extra_filter(node_info)
+                )
 
         else:
 
-            def filter_fn(obj: ASTNode) -> bool:
-                return type(obj) in obj_classes and (extra_filter is None or extra_filter(obj))
+            def filter_fn(node_info: NodeTraversalInfo) -> bool:
+                return type(node_info.node) in obj_classes and (
+                    extra_filter is None or extra_filter(node_info)
+                )
 
-        for elem in self.dfs(prune=prune, filter=filter_fn, bottom_up=False, skip_self=skip_self):
-            yield t.cast(ASTNodeType, elem)
+        for n_info in self.dfs(prune=prune, filter=filter_fn, bottom_up=False):
+            yield cast(ASTNodeType, n_info.node)
+
+    def find(self, xpath: str | ASTXpath) -> ASTNode | None:
+        """Finds a node by xpath.
+
+        Args:
+            xpath (str | ASTXpath): The xpath to find.
+
+        Returns:
+            ASTNode | None: The node if found, otherwise None.
+
+        Raises:
+            ASTXpathDefinitionError: If the xpath is invalid.
+        """
+        from .match.xpath import ASTXpath
+
+        if isinstance(xpath, str):
+            xpath = ASTXpath(xpath)
+
+        try:
+            return next(xpath.findall(self))
+        except StopIteration:
+            return None
+
+    def findall(self, xpath: str | ASTXpath) -> Generator[ASTNode, None, None]:
+        """Finds all nodes by xpath.
+
+        Args:
+            xpath (str | ASTXpath): The xpath to find.
+
+        Returns:
+            Generator[ASTNode, None, None]: An iterator of nodes.
+
+        Raises:
+            ASTXpathDefinitionError: If the xpath is invalid.
+        """
+        from .match.xpath import ASTXpath
+
+        if isinstance(xpath, str):
+            xpath = ASTXpath(xpath)
+
+        yield from xpath.findall(self)
 
     @classmethod
     def get_property_fields(
         cls,
         skip_id: bool = True,
         skip_origin: bool = True,
-        skip_original_id: bool = True,
-        skip_id_collision_with: bool = True,
-        skip_hidden: bool = True,
+        skip_content_id: bool = True,
         skip_non_compare: bool = False,
-    ) -> t.Iterable[tuple[str, Field]]:
-        """Returns an iterator of all properties (but not child attributes) of this node using
-        static type information.
+        skip_non_init: bool = False,
+    ) -> Iterable[Field]:
+        """Returns an iterator of all properties (but not child attributes) of
+        this node using static type information.
 
         Args:
             skip_id (bool, optional): Whether to skip the id property. Defaults to True.
             skip_origin (bool, optional): Whether to skip the origin property. Defaults to True.
-            skip_original_id (bool, optional): Whether to skip the original_id property. Defaults to True.
-            skip_id_collision_with (bool, optional): Whether to skip the id_collision_with property. Defaults to True.
-            skip_hidden (bool, optional): Whether to skip properties starting with an underscore. Defaults to True.
+            skip_content_id (bool, optional): Whether to skip the content_id property. Defaults to True.
             skip_non_compare (bool, optional): Whether to skip properties that are not used in comparison (field.comapre is False). Defaults to False.
 
         Yields:
-            t.Iterable[tuple[str, Field]]: An iterator of tuples of (field name, field).
-
+            Iterable[tuple[str, Field]]: An iterator of tuples of (field name, field).
         """
-        if cls._props is None:
-            cls._props = {f.name: (f, type_) for f, type_ in get_ast_node_properties(cls).items()}
 
-        for name, (f, _) in cls._props.items():
-            if _is_skip_field(
-                field=f,
-                skip_id=skip_id,
-                skip_origin=skip_origin,
-                skip_original_id=skip_original_id,
-                skip_id_collision_with=skip_id_collision_with,
-                skip_hidden=skip_hidden,
-                skip_non_compare=skip_non_compare,
-                skip_non_init=False,
-            ):
+        for f in _get_cls_props(cls):
+            # Skip id
+            if (f.name == "id") and skip_id:
                 continue
 
-            yield name, f
+            # Skip content_id
+            if f.name == "content_id" and skip_content_id:
+                continue
+
+            # Skip origin
+            if f.name == "origin" and skip_origin:
+                continue
+
+            # Skip non-comparable fields
+            if not f.compare and skip_non_compare:
+                continue
+
+            # Skip non-init fields
+            if not f.init and skip_non_init:
+                continue
+
+            yield f
 
     @classmethod
     def get_child_fields(
         cls,
-    ) -> t.Mapping[str, tuple[Field, ChildFieldTypeInfo]]:
-        """Returns an iterator of all child attributes of this node using static type information.
+    ) -> Mapping[Field, FieldTypeInfo]:
+        """Returns an iterator of all child attributes of this node using
+        static type information.
 
         Returns:
-            t.Mapping[str, tuple[Field, ChildFieldTypeInfo]]:
+            Mapping[Field, ChildFieldTypeInfo]:
                 A mapping of child attribute name to (field, type_info).
-
         """
-        if cls._child_fields is None:
-            cls._child_fields = {
-                f.name: (f, type_info) for f, type_info in get_ast_node_child_fields(cls).items()
-            }
-
-        return cls._child_fields
+        return _get_cls_child_fields(cls)
 
     def get_properties(
         self,
         skip_id: bool = True,
         skip_origin: bool = True,
-        skip_original_id: bool = True,
-        skip_id_collision_with: bool = True,
-        skip_hidden: bool = True,
+        skip_content_id: bool = True,
         skip_non_compare: bool = False,
-    ) -> t.Iterable[tuple[t.Any, Field]]:
-        """Returns an iterator of all properties (but not child attributes) of this node.
+        skip_non_init: bool = False,
+    ) -> Iterable[tuple[Any, Field]]:
+        """Returns an iterator of all properties (but not child attributes) of
+        this node.
 
         Args:
             skip_id (bool, optional): Whether to skip the id property. Defaults to True.
             skip_origin (bool, optional): Whether to skip the origin property. Defaults to True.
-            skip_original_id (bool, optional): Whether to skip the original_id property. Defaults to True.
-            skip_id_collision_with (bool, optional): Whether to skip the id_collision_with property. Defaults to True.
-            skip_hidden (bool, optional): Whether to skip properties starting with an underscore. Defaults to True.
+            skip_content_id (bool, optional): Whether to skip the content_id property. Defaults to True.
             skip_non_compare (bool, optional): Whether to skip properties that are not used in comparison (field.comapre is False). Defaults to False.
 
         Yields:
-            t.Iterable[tuple[t.Any, Field]]: An iterator of tuples of (value, field).
-
+            Iterable[tuple[Any, Field]]: An iterator of tuples of (value, field).
         """
-        for f in fields(self):
-            if _is_skip_field(
-                field=f,
-                skip_id=skip_id,
-                skip_origin=skip_origin,
-                skip_original_id=skip_original_id,
-                skip_id_collision_with=skip_id_collision_with,
-                skip_hidden=skip_hidden,
-                skip_non_compare=skip_non_compare,
-                skip_non_init=False,
-            ):
-                continue
+        # Dynamicaly generate a specialized function for this class
+        gen_get_properties_func(self.__class__, _get_cls_props(self.__class__))
 
-            # Always skip children
-            if self._is_field_child(f):
-                continue
+        # At this point this will call a specialized function
+        yield from self.get_properties(
+            skip_id, skip_origin, skip_content_id, skip_non_compare, skip_non_init
+        )
 
-            yield getattr(self, f.name), f
-
-    def get_child_nodes(self) -> t.Iterable[ASTNode]:
+    def get_child_nodes(self) -> Iterable[ASTNode]:
         """Returns a generator object which yields all child nodes."""
-        for f in fields(self):
-            # Skip non-child fields
-            if not self._is_field_child(f):
-                continue
 
-            objects = self._ensure_iterable(getattr(self, f.name))
-            for o in objects:
-                assert isinstance(o, ASTNode)
-                yield o
+        # Dynamicaly generate a specialized function for this class
+        gen_get_child_nodes_func(self.__class__, _get_cls_child_fields(self.__class__))
+
+        # At this point this will call a specialized function
+        yield from self.get_child_nodes()
 
     def get_child_nodes_with_field(
         self,
-    ) -> t.Iterable[tuple[ASTNode, Field, int | None]]:
-        """Returns a generator object which yields all child nodes with their corresponding field
-        and index (for lists and tuples)."""
-        for f in fields(self):
-            # Skip non-child fields
-            if not self._is_field_child(f):
-                continue
+    ) -> Iterable[tuple[ASTNode, Field, int | None]]:
+        """Returns a generator object which yields all child nodes with their
+        corresponding field and index (for tuples)."""
 
-            objects = getattr(self, f.name)
-            if isinstance(objects, (list, tuple)):
-                for i, o in enumerate(objects):
-                    assert isinstance(o, ASTNode)
-                    yield o, f, i
-            elif objects is not None:
-                assert isinstance(objects, ASTNode)
-                yield objects, f, None
+        # Dynamicaly generate a specialized function for this class
+        gen_get_child_nodes_with_field_func(self.__class__, _get_cls_child_fields(self.__class__))
+
+        # At this point this will call a specialized function
+        yield from self.get_child_nodes_with_field()
 
     def __rich__(self, parent: Tree | None = None) -> Tree:
         """Returns a tree widget for the 'rich' library."""
@@ -1521,12 +829,7 @@ class ASTNode(DataClassSerializeMixin):
         for p, f in self.get_properties(skip_id=False):
             tree.add(f":spiral_notepad: [yellow]{f.name}[/]={escape(str(p))}")
 
-        for f in fields(self):
-            # Skip non-child fields
-            if not self._is_field_child(f):
-                continue
-
-            child = getattr(self, f.name)
+        for child, f in self.iter_child_fields():
             if isinstance(child, Iterable):
                 if not child:
                     tree.add(f":file_folder:[yellow]{f.name}[/]={escape('()')}")
@@ -1534,8 +837,7 @@ class ASTNode(DataClassSerializeMixin):
 
                 subtree = tree.add(f":file_folder:[yellow]{f.name}[/]")
                 for c in child:
-                    if isinstance(c, ASTNode):
-                        c._rich(subtree, f)
+                    c._rich(subtree, f)
             elif child is None:
                 tree.add(f":file_folder:[yellow]{f.name}[/]={escape(str(None))}")
             else:
@@ -1543,301 +845,24 @@ class ASTNode(DataClassSerializeMixin):
 
         return tree
 
-    __hash__ = None  # type: ignore # Make sure even frozen dataclasses will not be hashable
+    __hash__ = _hash_fn
 
     def __init_subclass__(cls) -> None:
-        cls.__hash__ = None  # type: ignore # Make sure even frozen dataclasses will not be hashable
+        # Make sure subclasses use the same hash, eq functions
+        # instead of the standard slow dataclass approach
+        cls.__hash__ = _hash_fn  # type: ignore[assignment]
+        cls.__eq__ = _eq_fn  # type: ignore[assignment]
 
-        # Make sure each class uses it's own list of child fields & properties
-        # We do not set them until first access due forwared references
-        # that may not be resolved yet.
-        cls._props = None
-        cls._child_fields = None
-
-        return super().__init_subclass__()
-
-
-ASTNodeType = t.TypeVar("ASTNodeType", bound=ASTNode)
-
-
-class ASTVisitor(t.Generic[VisitorReturnType]):
-    """A visitor generic base class for an AST visitor.
-
-    Args:
-        t (_type_): Vistior return type
-
-    """
-
-    strict: bool = False
-    """Strict visitors match visit methods to nodes by exact type.
-
-    Non-strict visitors will match by isinstance check in MRO order.
-
-    """
-
-    def generic_visit(self, node: ASTNode) -> VisitorReturnType:
-        raise NotImplementedError
-
-    def visit(self, node: ASTNode) -> VisitorReturnType:
-        """Visits the given node and returns the result."""
-        return node.accept(self)
-
-    def __init_subclass__(cls, *, validate: bool = False) -> None:
-        """Iterate over new visitor methods and check that names match the node type annotation."""
-        if validate:
-            mismatched_pairs: list[tuple[str, str]] = []
-            for method_name, method in getmembers(cls, isfunction):
-                if method_name.startswith("visit_"):
-                    expected_node_type = method_name[6:]
-                    node_type_annotation = method.__annotations__.get("node", None)
-                    if node_type_annotation is not None:
-                        node_type_str = (
-                            node_type_annotation
-                            if isinstance(node_type_annotation, str)
-                            else node_type_annotation.__name__
-                        )
-
-                        if expected_node_type != node_type_str:
-                            mismatched_pairs.append((method_name, node_type_str))
-
-            if mismatched_pairs:
-                raise TypeError(
-                    f"Visitor class '{cls.__name__}' method(s) '{', '.join(itemgetter(0)(pair) for pair in mismatched_pairs)}' do not match node type annotation(s) '{', '.join(itemgetter(1)(pair) for pair in mismatched_pairs)}'"
-                )
-
-        return super().__init_subclass__()
-
-
-class ASTTransformVisitor(ASTVisitor[ASTNode | None]):
-    """A visitor that transforms an AST by applying changes to its nodes.
-
-    Note:
-        Transformation creates a full copy of the original tree in memory
-        if it was an attached tree (and it normally will be).
-        Visitor methods operate on a copy, rather than the original nodes.
-        The copies are detached, meaning that the visitor method will get nodes
-        that do not have assigned parents and thus walking up the tree is not
-        possible.
-
-        If transformation didn't raise an exception, the original tree is
-        replaced with the transformed tree using ASTNode.replace_with().
-        This means that the original tree object becomes fully detached.
-
-    Methods:
-        _transform_children: Transforms the children of a given node and returns a
-            dictionary with the changes suitable to be passed to ASTNode.replace
-            method.
-        generic_visit: Transforms the children of the given node and returns a new
-            node with the changes.
-        visit: alias of transform. Prefer `transform`.
-        transform: Transforms a given node and returns the transformed node or None
-            if the node was removed.
-
-    Raises:
-        ASTTransformError: If the transformation fails with the original exception
-            as context.
-
-    """
-
-    def _transform_children(
-        self, node: ASTNode
-    ) -> t.Mapping[str, ASTNode | None | list[ASTNode] | tuple[ASTNode, ...]]:
-        """Transforms the children of a given node and returns a mapping of field names to changes.
-
-        This mapping can be passed to ASTNode.replace method.
-
-        """
-        changes: dict[str, ASTNode | None | list[ASTNode] | tuple[ASTNode, ...]] = {}
-        field_names_with_changes = set()
-
-        # Iterate over all child nodes and collect changes
-        for child, f, index in node.get_child_nodes_with_field():
-            fname = f.name
-            if index is not None:
-                # child field with a sequence
-                # we need to store both changes and unchanged nodes to create a new sequence
-                if fname not in changes:
-                    changes[fname] = []
-
-                new_child = self.transform(child)
-
-                if new_child is not None:
-                    changes[fname].append(new_child)  # type: ignore[union-attr]
-
-                    if new_child is not child:
-                        # New child, mark as changed field
-                        field_names_with_changes.add(fname)
-                else:
-                    # Removed child, mark as changed field
-                    field_names_with_changes.add(fname)
-            else:
-                new_child = self.transform(child)
-
-                changes[fname] = new_child
-
-                if new_child is not child:
-                    # New child, mark as changed field
-                    field_names_with_changes.add(fname)
-
-        # Remove unchanged fields
-        unchanged_fields = set(changes.keys()) - field_names_with_changes
-
-        for fname in unchanged_fields:
-            changes.pop(fname)
-
-        # Ensure the correct sequence type for changed sequence fields
-        for fname in field_names_with_changes:
-            _, type_info = t.cast(
-                tuple[Field, ChildFieldTypeInfo], node.get_child_fields().get(fname)
+        # Try checking type annotations now
+        # At this point not all forward references may be resolved
+        # so it may fail (i.e. skipped)
+        if not check_annotations(cls, ASTNode) and config.TRACE_LOGGING:
+            logger.debug(
+                f"Annotations for {cls.__name__} could not be checked"
+                " due to unresolved forward references."
             )
 
-            if type_info.sequence_type is not None:
-                changes[fname] = type_info.sequence_type(t.cast(list[ASTNode], changes[fname]))
-
-        # Return the changes
-        return changes
-
-    def generic_visit(self, node: ASTNode) -> ASTNode | None:
-        """Transforms children of the given node and returns a new node with the changes."""
-
-        changes = self._transform_children(node)
-
-        # No changes, return the original node
-        if not changes:
-            return node
-
-        # Return a new node with the changes
-        return node.replace(**changes)
-
-    def visit(self, node: ASTNode) -> ASTNode | None:
-        """Overrides the default visit method to ensure that the node is detached before
-        transformation.
-
-        Args:
-            node (ASTNode): The node to transform
-
-        Returns:
-            ASTNode | None: The transformed node or None if the node was
-            removed.
-
-        """
-        return self.transform(node)
-
-    def transform(self, node: ASTNode) -> ASTNode | None:
-        """Transforms a given node and returns the transformed node or None if the node was removed.
-
-        Args:
-            node (ASTNode): The node to transform
-
-        Returns:
-            ASTNode | None: The transformed node or None if the node was removed.
-
-        Raises:
-            ASTTransformError: If the transformation fails with the original exception
-                as context.
-
-        """
-        orig_node: ASTNode | None = None
-
-        # If we are transforming an attached tree or subtree
-        # we create a fully detached clone, transform it
-        # and then replace the original node with the transformed one.
-        # but only if transformation was successful.
-        if not node.detached:
-            orig_node = node
-            node = node.duplicate(as_detached_clone=True)
-
-        transformed: ASTNode | None = None
-        try:
-            transformed = super().visit(node)
-
-            if orig_node is not None:
-                orig_node.replace_with(transformed)
-
-            return transformed
-        except Exception as e:
-            raise ASTTransformError(orig_node=node, transformed_node=transformed) from e
+        return super().__init_subclass__()
 
 
-class ASTTransformer(ABC):
-    """A transformer base class for AST nodes."""
-
-    def prune(self, node: ASTNode) -> bool:
-        """A function used to prune the tree during transformation.
-
-        Must returns whether the given node should prevent further traversal (see `ASTNode.dfs`).
-
-        Default implementation returns False, meaning that the tree will be fully traversed.
-
-        Args:
-            node (ASTNode): The current node being transformed.
-
-        """
-        return False
-
-    def filter(self, node: ASTNode) -> bool:
-        """A function used to filter the tree during transformation.
-
-        Must returns whether the given node should be transformed (see `ASTNode.dfs`).
-
-        Default implementation returns True, meaning that all nodes will be transformed.
-
-        Args:
-            node (ASTNode): The current node being considered for transformation.
-
-        """
-        return True
-
-    @abstractmethod
-    def transform(self, node: ASTNode) -> ASTNode | None:
-        """The main function implementing the transformation logic.
-
-        Args:
-            node (ASTNode): The node to transform.
-
-        Returns:
-            ASTNode: A new transformed node or the original node.
-
-        """
-        raise NotImplementedError
-
-    def execute(self, node: ASTNode) -> ASTNode | None:
-        """Executes the `transform` function defined on this class against all nodes in subtree
-        rooted in `node`, applying filter and pruning function as defined on this class.
-
-        Bottom up traversal is used, so that the children of a node are transformed before the node itself.
-
-        If transform function returns a new node, the original node is replaced with the new node.
-
-        Args:
-            node (ASTNode): The node to transform.
-
-        Raises:
-            ASTTransformError: If the original node cannot be replaced with the transformed node.
-
-        Returns:
-            ASTNode | None: The transformed node.
-
-        """
-        for child in node.dfs(bottom_up=True, filter=self.filter, prune=self.prune):
-            new_node = self.transform(child)
-
-            if child is node:
-                # We hit the root node, return the transformed node
-                return new_node
-
-            if new_node is not child:
-                # Means that the node was transformed
-                if (
-                    new_node is None
-                    or new_node.id
-                    != child.id  # means the new node wasn't created using ASTNode.replace() which would retain the ID
-                ):
-                    # try to replace the node
-                    try:
-                        child.replace_with(new_node)
-                    except Exception as e:
-                        raise ASTTransformError(orig_node=child, transformed_node=new_node) from e
-
-        # Means that this node was pruned
-        return node
+ASTNodeType = TypeVar("ASTNodeType", bound=ASTNode)
