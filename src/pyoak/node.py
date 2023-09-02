@@ -545,27 +545,34 @@ class ASTNode(DataClassSerializeMixin):
             Generator[NodeTraversalInfo, None, None]:
                 A generator object which yields all sub-nodes in the DFS (Depth-first) order.
         """
-        # We add "dummy" info, for type safety. It is not yielded anyway
-        build_stack: list[NodeTraversalInfo] = [NodeTraversalInfo(self, self, field(), None)]
+
+        build_stack: list[NodeTraversalInfo] = []
         yield_queue: Deque[NodeTraversalInfo] = deque()
 
-        skip_self = True
+        if bottom_up:
+            appender = yield_queue.appendleft
+        else:
+            appender = yield_queue.append
+
+        children_info = list(self.get_child_nodes_with_field())
+
+        if not bottom_up:
+            children_info.reverse()
+
+        for c, f, i in children_info:
+            build_stack.append(NodeTraversalInfo(c, self, f, i))
+
         while build_stack:
             child_info = build_stack.pop()
 
-            if not skip_self:
-                if filter is None or filter(child_info):
-                    if bottom_up:
-                        yield_queue.appendleft(child_info)
-                    else:
-                        yield_queue.append(child_info)
+            if filter is None or filter(child_info):
+                appender(child_info)
 
-                if prune and prune(child_info):
-                    continue
-            else:
-                skip_self = False
+            if prune and prune(child_info):
+                continue
 
             children_info = list(child_info.node.get_child_nodes_with_field())
+
             if not bottom_up:
                 children_info.reverse()
 
@@ -590,21 +597,19 @@ class ASTNode(DataClassSerializeMixin):
         Returns:
             the generator object.
         """
-        # We add "dummy" info, for type safety. It is not yielded anyway
-        queue: Deque[NodeTraversalInfo] = deque([NodeTraversalInfo(self, self, field(), None)])
 
-        skip_self = True
+        queue: Deque[NodeTraversalInfo] = deque(
+            (NodeTraversalInfo(c, self, f, i) for c, f, i in self.get_child_nodes_with_field())
+        )
+
         while queue:
             child = queue.popleft()
 
-            if not skip_self:
-                if filter is None or filter(child):
-                    yield child
+            if filter is None or filter(child):
+                yield child
 
-                if prune and prune(child):
-                    continue
-            else:
-                skip_self = False
+            if prune and prune(child):
+                continue
 
             # Walk through children
             queue.extend(
