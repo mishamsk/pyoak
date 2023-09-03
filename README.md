@@ -19,11 +19,6 @@ Commerial-grade, well tested, documented and typed Python library for modeling, 
 * ... and more!
 
 ## Feature Roadmap<!-- omit from toc -->
-* Pattern matcher rewrite to a bespoke engine to avoid limitations of the current implementation
-* Context-aware pattern matching
-* Prettyfiyng pattern matching language to make it more friendly
-* Strict-mode with runtime field value type checking
-* Frozen version of ASTNode
 * Make orjson, pyyaml, msgpack & chardet optional dependencies
 * ~~rustify some parts for performance~~ well, that's too far-fetched
 
@@ -31,12 +26,15 @@ Commerial-grade, well tested, documented and typed Python library for modeling, 
 - [Installation](#installation)
 - [Basic Usage](#basic-usage)
 - [Documentation](#documentation)
-    - [Attached \& Detached Nodes, Registry](#attached--detached-nodes-registry)
     - [Defining a Model](#defining-a-model)
         - [Inheritance](#inheritance)
     - [Creating a Node](#creating-a-node)
+        - [Runtime Type Checks](#runtime-type-checks)
+        - [ID's \& Registry](#ids--registry)
     - [~~Mutating~~ Applying Changes to a Node](#mutating-applying-changes-to-a-node)
     - [Traversal](#traversal)
+        - [Going Down the Tree](#going-down-the-tree)
+        - [Going Up the Tree](#going-up-the-tree)
     - [Other Helpers](#other-helpers)
     - [Xpath \& Pattern Matching](#xpath--pattern-matching)
         - [Xpath](#xpath)
@@ -44,7 +42,6 @@ Commerial-grade, well tested, documented and typed Python library for modeling, 
     - [Visitors \& Transformers](#visitors--transformers)
         - [ASTVisitor](#astvisitor)
         - [ASTTransformVisitor](#asttransformvisitor)
-        - [ASTTransformer](#asttransformer)
     - [Serialization \& Deserialization](#serialization--deserialization)
         - [Debugging \& Reporting Deserialization Errors for Deeply Nested Trees](#debugging--reporting-deserialization-errors-for-deeply-nested-trees)
 - [Credits](#credits)
@@ -67,22 +64,22 @@ from pyoak.origin import CodeOrigin, TextSource, get_code_range
 from rich import print
 
 
-@dataclass
+@dataclass(frozen=True)
 class Name(ASTNode):
     identifier: str
 
 
-@dataclass
+@dataclass(frozen=True)
 class NumberLiteral(ASTNode):
     value: int
 
 
-@dataclass
+@dataclass(frozen=True)
 class Stmt(ASTNode):
     pass
 
 
-@dataclass
+@dataclass(frozen=True)
 class AssignStmt(Stmt):
     name: Name
     value: NumberLiteral
@@ -109,7 +106,6 @@ print(
 assert node is AssignStmt.get(node.id)  # you can always get the node using only its id
 dup_node = node.duplicate()  # returns a deep copy of the node
 assert node is not dup_node  # they are different, including id, but...
-dup_node.original_id = node.id  # ...they can be linked together
 assert dup_node == node  # True
 # which is the same as
 assert (
@@ -135,36 +131,29 @@ pyoak code is strictly typed and heavily documented. Most public (and private) m
 
 It is strongly encouraged to use mypy/pyright (or your type checker of choice) as it will make working with ASTs a breeze, as well as help you to avoid many common mistakes.
 
-### Attached & Detached Nodes, Registry
-
-The first and potentially the most important thing to understand is that whenever you create a node instance by default it becomes "attached" to a global registry and gets a unique id.
-
-Attached nodes not only are guaranteed to have a unique id, they ensure uniqueness of their children, get a reference to their parent and maintain this state even when [changes are made](#mutating-applying-changes-to-a-node) to the tree. And of course, you can always get a node by its id, thus allowing you to have external cross-references, such as semantic graph.
-
-To ensure correctness, attached nodes are assumed to be pseudo-immutable and should only be changed via [APIs](#mutating-applying-changes-to-a-node) or [transforms](#visitors--transformers). Since there is no true way to enforce this in Python, it is up to you to follow this rule, but there are a number of checks that will raise exceptions - see docs for particular APIs for more details.
-
 ### Defining a Model
 
 pyoak AST nodes are regular Python [dataclasses](https://docs.python.org/3/library/dataclasses.html), with ~~a lot of~~ some additional magic.
 
-To create a node you just need to create a dataclass that inherits from `pyoak.node.ASTNode`.
+To create a node you just need to create a frozen dataclass that inherits from `pyoak.node.ASTNode`.
 
 ```python
 from dataclasses import dataclass
 from pyoak.node import ASTNode
 
-@dataclass
+@dataclass(frozen=True)
 class MyNode(ASTNode):
     attribute: int
     child: ASTNode | None
     more_children: tuple[ASTNode, ...]
 ```
 
-Any field that is either a union of `ASTNode` subclasses (including optional `None`), or a tuple/list of `ASTNode` subclasses will be considered as a child field. Anything else, including `dict[str, ASTNode]` won't become a child!
 
-Since node instances are assumed to be pseudo-immutable, it is not expected that you'll need anything beyond a tuple of children. Even lists are supported for legacy reasons and may/will be removed in the future.
+All fields are classified into either child fields or properties. Any subclass of ASTNode in field type marks it as a child field.
 
-> ⚠️ Frozen dataclasses are not supported yet (see [the roadmap](#feature-roadmap)), but you should treat the library as generally geared towards treating nodes as if they are
+Since nodes are assumed to be immutable, pyoak will check type annotations on the best effort basis, to prevent usage of mutable types by raising an exception at class defintion. The following rules are enforced:
+* Child fields may only be a union of `ASTNode` subclasses (including optional `None`), or a tuple of `ASTNode` subclasses. Anything else will raise an exception.
+* For properties, nutable collections are not allowed, but arbitrary types are. It is up to you to ensure that the type is immutable.
 
 > 💡 You may use dataclasses.field, e.g. to define defaults, provide serialization hints via metadata, or mark some fields as non-compare. pyoak doesn't restrict you in any way
 
@@ -173,25 +162,25 @@ Since node instances are assumed to be pseudo-immutable, it is not expected that
 It may be convenient to use inheritance. Especially when combined with the fact that dataclasses can override fields of their parent classes. See the example below:
 
 ```python
-@dataclass
+@dataclass(frozen=True)
 class Expr(ASTNode):
     """Base for all expressions"""
     pass
 
-@dataclass
+@dataclass(frozen=True)
 class Literal(Expr):
     """Base for all literals"""
     value: Any
 
-@dataclass
+@dataclass(frozen=True)
 class NumberLiteral(Literal):
     value: int
 
-@dataclass
+@dataclass(frozen=True)
 class NoneLiteral(Literal):
     value: None = field(default=None, init=False)
 
-@dataclass
+@dataclass(frozen=True)
 class BinExpr(Expr):
     """Base for all binary expressions"""
     left: Expr
@@ -204,53 +193,59 @@ Not only have you defined the model for binary expressions, but also:
 
 all while maintaining full class compatibility.
 
-> 💡 You may use multiple inheritance as well, say, to define "tag" like classes, that do not carry any data, but are used to mark nodes. E.g. `Unsupported` for structures that wrap unparsed code
+> 💡 You may use multiple inheritance as well, say, to define "tag" like classes, that do not carry any data, but are used to mark nodes. E.g. `Unsupported` for structures that wrap unparsed code. However, this will prevent you from using slotted classes
 
 ### Creating a Node
 
-In its simplest form you just instantiate a class. The only mandatory keyword field that ASTNode adds is `origin`:
+In its simplest form you just instantiate a class:
 
 ```python
-int_val = NumberLiteral(value=1, origin=NoOrigin())
+int_val = NumberLiteral(value=1)
 ```
+This will create a node with automatically generated id.
 
-This will create an attached node with automatically generated id. You may also specify the id explicitly:
+The base ASTNode class defines only one optional field `origin` (which defaults to `NO_ORIGIN` sentinel)
 
 ```python
-int_val = NumberLiteral(value=1, origin=NoOrigin(), id="some_id")
+int_val = NumberLiteral(value=1, origin=CodeOrigin(...))
 ```
 
-in this scenario, pyoak will check if the id is unique. If it is not, it will create a new unique one and will set `id_collision_with` to the id that you've provided.
+#### Runtime Type Checks
 
-This is helpful if you have some natural id from the parsing source and you want to catch duplicates.
-
-You can also pass `ensure_unique_id=True` to raise an exception instead.
+pyoak has an optional feature (disabled by default) to do runtime type checks on instance creation. To enable it use the following snippet:
 
 ```python
-int_val1 = NumberLiteral(value=1, origin=NoOrigin(), id="some_id")
-int_val2 = NumberLiteral(value=1, origin=NoOrigin(), id="some_id", ensure_unique_id=True) # will raise ASTNodeIDCollisionError
+from pyoak import config
+
+config.RUNTIME_TYPE_CHECK = True
 ```
 
-There are other optional init-only arguments to create a detached node, to mark id collision as a duplicate rather than a collision. There are also more exceptions that may be raised, e.g. if you try to create a node with children that are already children of another node. Refer to the docstrings for more details.
+This feature is convenient during development, to check for typical mistakes, like passing list instead of tuple. However, it is not recommended to use it in production, as it slows down instance creation by 20-40%.
+
+#### ID's & Registry
+
+Every time you create a node, it gets two ids: `id` and `content_id`. The former is a globally unique id for the node, the latter is a hash representing node's content (itself and all of it's children).
+
+Each new node is automatically added to the registry, which is a mapping from `id` to the node. This allows you to retrieve any node by its id, even if you don't have a reference to it.
+
+```python
+int_val = NumberLiteral(value=1)
+assert int_val is NumberLiteral.get(int_val.id)
+# or
+assert int_val is ASTNode.get_any(int_val.id)
+```
+
+However, registry is a weak mapping, so if you don't have any references to the node anywhere, it will be garbage collected and removed from the registry.
 
 ### ~~Mutating~~ Applying Changes to a Node
 
-If you need to change values of a node, there is a `replace` method. It will create and return a new node with changes applied to it.
-
-This works similarly to dataclasses.replace, but with some differences:
-* It will automatically update the content_id of the node and all of its parents if needed.
-* It is not allowed to change the following attributes: id, content_id, original_id, id_collision_with, fields with init=False.
-* In addition to creating a new instance, it will also replace the node in the AST registry and within its parent if it has one.
-
-Currently, `replace` doesn't validate the types of the changes you pass in to be compatible with the types of the fields you are trying to change, but runtime type checks are [planned for the future](#feature-roadmap).
-
-There is also a second method: `replace_with`. It allows you to replace the entire node with a new one or None (remove the node).
-
-Unlike `replace`, it does a runtime check against the parent if a node you are changing has one. Thus ensuring that the change is type safe.
+Nodes are immutable (to the extent possible in Python), thus if you need to change values of a node, use `dataclasses.replace` function.
 
 ### Traversal
 
-Each node, even a detached one, knows about its children:
+#### Going Down the Tree
+
+Each node, knows about its children:
 
 ```python
 for c in node.get_child_nodes():
@@ -261,13 +256,7 @@ for c in node.get_child_nodes():
 list_of_children = node.children
 ```
 
-and attached nodes also know about their parents:
-
-```python
-parent = node.parent
-```
-
-But that's not all. There are multiple helpers to traverse down the tree:
+There are multiple helpers to traverse down the tree:
 
 ```python
 for num_lits in node.dfs(skip_self=False, filter=lambda n: isinstance(n, NumberLiteral)):
@@ -282,25 +271,36 @@ for num_lits in node.gather(NumberLiteral):
 list(node.bfs(filter=important_nodes, prune=stop_at))
 ```
 
-check the docstring for full parameter documentation.
+Note, that these methods return an generator, so you can stop the traversal at any time. Also, worth mentioning that the node itself is not yielded.
 
-There are also helpers & shorthands for traversing up the tree:
+#### Going Up the Tree
+
+If you need to search "up" the tree, you need to use the `Tree` instance created from the root node:
 
 ```python
-for ancestor in node.ancestors():
+tree = Tree(root_node)
+# or
+tree =root_node.to_tree()
+```
+
+Now you can use multiple methods:
+```python
+parent = tree.parent(node) # to get the parent of the node
+
+for ancestor in tree.ancestors(node):
     print(ancestor)
 
-parent_stmt = expr_node.get_first_ancestor_of_type(Stmt)
+parent_stmt = tree.get_first_ancestor_of_type(expr_node, Stmt)
 ```
 
 ### Other Helpers
 
 Besides the traversal methods mentioned above, there are also some other helpers:
 
-* `duplicate` - create a deep copy of the given subtree, recursively duplicating all of its children
-* `to_properties_dict` - that gives a mapping of field names to values only for the properties of the node, without the children
-* `is_ancestor` - check if a node is an ancestor of another node
-* `get_depth` - get the depth of the node in the tree, with an optional `relative_to` parameter to get the depth relative to another node
+* `ASTNode.duplicate` - create a deep copy of the given subtree, recursively duplicating all of its children
+* `ASTNode.to_properties_dict` - that gives a mapping of field names to values only for the properties of the node, without the children
+* `Tree.is_ancestor` - check if a node is an ancestor of another node
+* `Tree.get_depth` - get the depth of the node in the tree, with an optional `relative_to` parameter to get the depth relative to another node
 
 and others, that are less commonly used.
 
@@ -314,13 +314,25 @@ Pattern matching is concerned with matching nodes by their content, including th
 
 #### Xpath
 
-To match, you must create an ASTXpath object and call its `match` method:
+If you want to find all sub-nodes matching a given xpath starting a given node, you can use the `find` and `findall` methods:
+
+```python
+root_node = parse("some code")
+for node in root_node.findall("//IntLiteral"):
+    print(node.value)
+```
+
+If you want to match a given node, i.e. check if it's in the path, you must create an ASTXpath object and call its `match` method:
 
 ```python
 from pyoak.match.xpath import ASTXpath
 
+root_node = parse("some code")
 xpath = ASTXpath("//IntLiteral")
-assert IntLiteral(value=1).match(xpath)
+
+...
+if xpath.match(root_node, some_node):
+    print("Matched!")
 ```
 
 **Syntax**
@@ -343,11 +355,30 @@ Types are instance comparisons, so any subclass matches a type.
 
 #### Pattern Matching
 
-Pattern matching is done using a "matcher" object. You first create it with a list of patterns you'd like to match against and then execute `match` against a node. The first pattern that matches will be returned.
+Pattern matching is done using a "matcher" object. There are two of them:
+* `MultiPatternMatcher` for matching against multiple patterns
+* `NodeMatcher` for matching against a single pattern
+
+To create a `NodeMatcher`:
+```python
+macher, msg = NodeMatcher.from_pattern("(RootClass @child_tuple=[(*) -> cap $cap *])")
+assert macher is not None, msg
+```
+
+and then match:
+```python
+node = RootClass(child_tuple=(c1, c2, tail)
+
+ok, match_dict = macher.match(node)
+assert ok
+assert match_dict["cap"] == f1
+```
+
+With `MultiPatternMatcher` you'll first create it with a list of patterns you'd like to match against and then execute `match` against a node.
 
 ```python
-matcher = PatternMatcher(
-    [("rule1", '(Literal #[value="re.*ex"])'), ("rule2", '(IntLiteral #[value="1"])')]
+matcher = MultiPatternMatcher(
+    [("rule1", '(Literal #value="re.*ex")'), ("rule2", '(IntLiteral #value="1")')]
 )
 match = matcher.match(node)
 ```
@@ -357,14 +388,12 @@ the result will be either `None`, meaning no pattern matched, or a tuple of the 
 The match dict will contain a mapping from capture keys to values. Capture keys are the names you can embed within the pattern to store something within the matched node. E.g.:
 
 ```python
-matcher = PatternMatcher([("rule", "(ParentType @[child_tuple_field =[(Literal) !! -> first_child, * -> remaining_children]])")])
+matcher = MultiPatternMatcher([("rule", "(ParentType @child_tuple_field =[(Literal) -> first_child, * -> remaining_children])")])
 ```
 
 this pattern matches any subclass of `ParentType` that has a child field `child_tuple_field` which is a sequence, first child of type Literal and then zero or more children of any type and shape.
 
 The capture key `first_child` will be mapped to the first child of the node that matched the pattern and `remaining_children` will be mapped to a tuple of the remaining children.
-
-> :warning: pattern matching is known to have some quirks, so use with caution. Upgrade of the internal engine is the main item on the [feature roadmap](#feature-roadmap).
 
 ### Visitors & Transformers
 
@@ -376,6 +405,8 @@ A base class for all visitors, and the one to use if you want to visit the tree 
 It provides a `visit` method that will call the appropriate `visit_<node_type>` method on the visitor object or `generic_visit` if one is not available.
 
 Important notes:
+* The class is generic in visit method return type. It is assumed that the type of all `visit_<node_type>` methods will match the return type. Unfirtunately, this cannot be type checked by mypy.
+* It is abstract class. As a minimum you must override `generic_visit`
 * Visitor doesn't visit children by default. It is up to you to call `visit` on the children you want to visit.
 * By default, visitor methods are matched by the type of the node, if not found the next type in the MRO is checked, and so on. Going back to our examples above `visit_Expr` will be triggered for any subclass of Expr, unless a more specific visitor is defined.
   * If you'd like visitor methods to be matched only by strict type equality, change the class variable `strict` to True in your visitor class.
@@ -385,34 +416,11 @@ Important notes:
 
 A base class for all visitors that need to transform the tree. It inherits from `ASTVisitor`, thus all of the notes above also apply to it.
 
-> ‼️ This is the recommended way of transforming the tree when you need to do a lot of changes. For simple changes, see `ASTTransformer` below or use `replace_with` directly.
-
-Instead of calling `visit`, you'd call the `transform` method (although `visit` will do the same thing).
-
-Unlike regular visitors, this one always works on a detached copy of the tree. This is necessary to ensure that the original tree is only modified and replaced on successful transformation.
-
-The major implication of this is that you can't traverse `up` the tree inside visitor methods, as the parent pointers are not set on the copy.
-
-#### ASTTransformer
-
-Strictly speaking, this is not a visitor, but just a thin wrapper that traverses the tree bottom up, depth-first (using the `ASTNode.dfs` method) and applying `ASTNode.replace_with` when necessary.
-
-Instead of passing functions to filters and writing replacement logic yourself, it allows you to inherit from `ASTTransformer`, redefine the `transform` method (and also optional `filter` and `prune` methods), and then run everything via the `execute` method.
-
-Unlike ASTTransformVisitor, this class works on the original tree, so you can traverse `up` the tree inside the `transform` method.
-
-```python
-class SomeTransformer(ASTTransformer):
-    def filter(self, node: ASTNode) -> bool:
-        return isinstance(node, TypeOfInterest)
-
-    def transform(self, node: ASTNode) -> ASTNode | None:
-        # In reality, based on the filter nodes will be of TypeOfInterest, but we can't specify that in the signature
-        if smth:
-            return None
-        else:
-            return node.replace(attr=new_value)
-```
+Unlike `ASTVisitor`:
+* It is not generic. Visitor methods return type is pinned to `ASTNode | None`
+* It provides a default implementation of `generic_visit` that will transform all children by default, if it detect any changes it will return a new node with the transformed children. Otherwise, it will return the original node.
+* You can use a helper method `_transform_children` to transform children. It will return a dictionary suitable for passing to `dataclasses.replace` to create a new node with the transformed children.
+* An alias to `visit` called `transform` is provided for convenience.
 
 ### Serialization & Deserialization
 

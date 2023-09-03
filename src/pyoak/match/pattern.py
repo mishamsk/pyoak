@@ -417,7 +417,7 @@ def validate_pattern(pattern_def: str) -> tuple[bool, str]:
     return True, "Valid pattern definition"
 
 
-class PatternMatcher:
+class MultiPatternMatcher:
     def __init__(self, pattern_defs: Sequence[tuple[str, str]]) -> None:
         """A tree pattern matcher.
 
