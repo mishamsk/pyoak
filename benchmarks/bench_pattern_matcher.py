@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from pyoak.legacy.match.pattern import PatternMatcher as OldPatternMatcher
 from pyoak.legacy.node import AwareASTNode
-from pyoak.match.pattern import PatternMatcher
+from pyoak.match.pattern import MultiPatternMatcher
 from pyoak.node import ASTNode
 from pyoak.origin import NO_ORIGIN
 
@@ -49,7 +49,7 @@ N = 10000
 
 st = time.monotonic()
 
-matcher = PatternMatcher([("rule", rule)])
+matcher = MultiPatternMatcher([("rule", rule)])
 print(f"Time to build new matcher: {time.monotonic() - st}")
 
 st = time.monotonic()
