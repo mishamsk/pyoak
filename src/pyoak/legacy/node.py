@@ -4,6 +4,7 @@ import enum
 import hashlib
 import logging
 import typing as t
+import warnings
 import weakref
 from abc import ABC, abstractmethod
 from collections import deque
@@ -1536,6 +1537,12 @@ class AwareASTNode(DataClassSerializeMixin):
     __hash__ = None  # type: ignore # Make sure even frozen dataclasses will not be hashable
 
     def __init_subclass__(cls) -> None:
+        warnings.warn(
+            "AwareASTNode is deprecated and may be removed in future versions",
+            DeprecationWarning,
+            stacklevel=1,
+        )
+
         cls.__hash__ = None  # type: ignore # Make sure even frozen dataclasses will not be hashable
 
         # Make sure each class uses it's own list of child fields & properties
