@@ -975,13 +975,13 @@ testing = ["pytest", "pytest-benchmark"]
 
 [[package]]
 name = "pre-commit"
-version = "3.3.3"
+version = "3.4.0"
 description = "A framework for managing and maintaining multi-language pre-commit hooks."
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "pre_commit-3.3.3-py2.py3-none-any.whl", hash = "sha256:10badb65d6a38caff29703362271d7dca483d01da88f9d7e05d0b97171c136cb"},
-    {file = "pre_commit-3.3.3.tar.gz", hash = "sha256:a2256f489cd913d575c145132ae196fe335da32d91a8294b7afe6622335dd023"},
+    {file = "pre_commit-3.4.0-py2.py3-none-any.whl", hash = "sha256:96d529a951f8b677f730a7212442027e8ba53f9b04d217c4c67dc56c393ad945"},
+    {file = "pre_commit-3.4.0.tar.gz", hash = "sha256:6bbd5129a64cad4c0dfaeeb12cd8f7ea7e15b77028d985341478c8af3c759522"},
 ]
 
 [package.dependencies]
@@ -1037,13 +1037,13 @@ testing = ["covdefaults (>=2.3)", "pytest (>=7.4)", "pytest-cov (>=4.1)", "pytes
 
 [[package]]
 name = "pytest"
-version = "7.4.0"
+version = "7.4.1"
 description = "pytest: simple powerful testing with Python"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "pytest-7.4.0-py3-none-any.whl", hash = "sha256:78bf16451a2eb8c7a2ea98e32dc119fd2aa758f1d5d66dbf0a59d69a3969df32"},
-    {file = "pytest-7.4.0.tar.gz", hash = "sha256:b4bf8c45bd59934ed84001ad51e11b4ee40d40a1229d2c79f9c592b0a3f6bd8a"},
+    {file = "pytest-7.4.1-py3-none-any.whl", hash = "sha256:460c9a59b14e27c602eb5ece2e47bec99dc5fc5f6513cf924a7d03a578991b1f"},
+    {file = "pytest-7.4.1.tar.gz", hash = "sha256:2f2301e797521b23e4d2585a0a3d7b5e50fdddaaf7e7d6773ea26ddb17c213ab"},
 ]
 
 [package.dependencies]
@@ -1328,21 +1328,21 @@ docs = ["furo (>=2023.8.19)", "sphinx (>=7.2.4)", "sphinx-argparse-cli (>=1.11.1
 testing = ["build[virtualenv] (>=0.10)", "covdefaults (>=2.3)", "detect-test-pollution (>=1.1.1)", "devpi-process (>=1)", "diff-cover (>=7.7)", "distlib (>=0.3.7)", "flaky (>=3.7)", "hatch-vcs (>=0.3)", "hatchling (>=1.18)", "psutil (>=5.9.5)", "pytest (>=7.4)", "pytest-cov (>=4.1)", "pytest-mock (>=3.11.1)", "pytest-xdist (>=3.3.1)", "re-assert (>=1.1)", "time-machine (>=2.12)", "wheel (>=0.41.2)"]
 
 [[package]]
-name = "tox-gh-actions"
-version = "3.1.3"
-description = "Seamless integration of tox into GitHub Actions"
+name = "tox-gh"
+version = "1.3.1"
+description = "Seamless integration of tox into GitHub Actions."
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "tox-gh-actions-3.1.3.tar.gz", hash = "sha256:ffd4151fe8b62c6f401a2fc5a01317835d7ab380923f6e0d063c300750308328"},
-    {file = "tox_gh_actions-3.1.3-py2.py3-none-any.whl", hash = "sha256:5954766fe2ed0e284f3cdc87535dfdf68d0f803f1011b17ff8cf52ed3156e6c1"},
+    {file = "tox_gh-1.3.1-py3-none-any.whl", hash = "sha256:c671c62ce23ae519a557c3da81e9aa7e35b3a66c69bad71908e595921f83e82d"},
+    {file = "tox_gh-1.3.1.tar.gz", hash = "sha256:594af90b740c14735c41b914b41db2d2aa0360929a1746af32bda4b9fef9bf3d"},
 ]
 
 [package.dependencies]
-tox = ">=4,<5"
+tox = ">=4.6"
 
 [package.extras]
-testing = ["black", "devpi-process", "flake8 (>=6,<7)", "mypy", "pytest (>=7,<8)", "pytest-cov (>=3,<4)", "pytest-mock (>=3,<4)", "pytest-randomly (>=3)"]
+test = ["covdefaults (>=2.3)", "devpi-process (>=0.3)", "pytest (>=7.3.2)", "pytest-cov (>=4.1)", "pytest-mock (>=3.10)"]
 
 [[package]]
 name = "twine"
@@ -1454,4 +1454,4 @@ testing = ["big-O", "jaraco.functools", "jaraco.itertools", "more-itertools", "p
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.10"
-content-hash = "d78eae5b458e7ece10ec2ca6bcb80014eb1c2bdbbe22ecb90a5accbfd7774429"
+content-hash = "8da76d7492895cef02e87e63861e46795c6036b61499e3b658db3a01b8bb4fda"
