@@ -65,7 +65,7 @@ def _eq_fn(self: ASTNode, other: ASTNode) -> bool:
     if other.__class__ is self.__class__:
         return self.content_id == other.content_id and self.origin == other.origin
 
-    raise NotImplementedError
+    return False
 
 
 # Hack to make dataclasses InitVar work with future annotations
