@@ -131,16 +131,13 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
             return cast(T, clazz.from_dict(value))
 
     def __init_subclass__(cls, **kwargs: Any):
-        if (old_type := TYPES.get(cls.__name__)) is not None:
+        if TYPES.get(cls.__name__) is not None:
             # We are not allowed to redefine a class that is already defined in a different package
             # except for one case - when dataclass re-creates the class with __slots__.
-            new_slotted = hasattr(cls, "__slots__")
-            old_slotted = hasattr(old_type, "__slots__")
-
             new_module = inspect.getmodule(cls)
             old_module = inspect.getmodule(TYPES[cls.__name__])
 
-            if new_module is not old_module or old_slotted or not new_slotted:
+            if new_module is not old_module:
                 raise ValueError(
                     f"DataClassSerializeMixin subclass <{cls.__name__}> is already defined "
                     f"in {old_module!s}. Please use a different name."

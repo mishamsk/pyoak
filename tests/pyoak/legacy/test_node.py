@@ -120,14 +120,6 @@ def test_get_child_fields() -> None:
     }
 
 
-def test_subclass_error() -> None:
-    with pytest.raises(ValueError):
-
-        @dataclass
-        class LegacyChildNode(ASTNode):
-            other_attr: str
-
-
 def test_id_handling() -> None:
     # Explicitly set id
     node = LegacyChildNode("test", origin=origin, id="test_id")

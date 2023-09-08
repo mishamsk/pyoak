@@ -96,12 +96,12 @@ def test_default_origin() -> None:
     assert ChildNode("test").origin == NO_ORIGIN
 
 
-def test_subclass_error() -> None:
-    with pytest.raises(ValueError):
+def test_slotted() -> None:
+    @dataclass(frozen=True, slots=True)
+    class SlottedNode(ASTNode):
+        attr: str
 
-        @dataclass(frozen=True)
-        class ChildNode(ASTNode):
-            other_attr: str
+    assert SlottedNode("test").origin == NO_ORIGIN
 
 
 def test_id_handling(pyoak_config: ConfigFixtureProtocol) -> None:
