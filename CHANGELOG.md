@@ -38,6 +38,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - TBD
 
+## [2.1.0] - 2023-09-11
+
+A quick iteration on the 2.0.0 release to ensure consistency of the API's naming and future support for slotted classes.
+
+### ⚠️ Breaking
+
+- Unify Tree API's to start with `get_` or `is_`
+
+### 🐛 Fixed
+
+- Workarounds for a couple stdlib slotted dataclasses bugs to support slotted ASTNodes (still contingent on Mashumaro update)
+
+### 🛠️ Internal
+
+- ⬇️ relaxed library dependency for Mashumaro
+- ⬆️ dev deps
+- Switch black pre-commit hook to new mirror repo
+
 ## [2.0.0] - 2023-09-03
 
 This is a significant rework, that brings most of the features previously on the roadmap, but also introduces major breaking changes. To avoid disruption, the v1 code has been moved to `legacy` sub-package and the legacy `ASTNode` is now called `AwareASTNode`. Legacy package will emit deprecation warnings on import though.
