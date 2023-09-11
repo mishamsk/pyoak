@@ -24,6 +24,12 @@ from pyoak.typing import Field
 
 from tests.pyoak.conftest import ConfigFixtureProtocol
 
+# get_child_nodes_with_field code is compiled on the fly on the first call
+# since it is used in __post_init__ of ASTNode, it happens on the first
+# instantiation of any ASTNode subclass
+# make sure that codegen for the ASTNode class itself doesn't break the subclasses
+_ = ASTNode()
+
 
 @dataclass(frozen=True)
 class ChildNode(ASTNode):
@@ -535,7 +541,7 @@ def test_to_tree() -> None:
     assert n.to_tree().root is n
 
 
-def test_iter_child_fields() -> None:
+def test_iter_child_fields(clean_ser_types) -> None:
     ch_nodes: list[ASTNode] = []
     ch_count = 10
     for i in range(ch_count):
@@ -562,6 +568,24 @@ def test_iter_child_fields() -> None:
             None,
             ParentNode.__dataclass_fields__["restricted_child"],
         ),
+    ]
+
+    # iter_child_fields is compiled on the fly
+    # Test codegen of a parent class doesn't break the subclasses
+    @dataclass(frozen=True)
+    class BaseNode(ASTNode):
+        child: ChildNode
+
+    @dataclass(frozen=True)
+    class SubNode(BaseNode):
+        child_seq: tuple[ChildNode, ...]
+
+    # trigger codegen for get_properties
+    _ = list(BaseNode(ChildNode("1")).iter_child_fields())
+
+    assert list(SubNode(ChildNode("1"), (ChildNode("2"),)).iter_child_fields()) == [
+        (ChildNode("1"), SubNode.__dataclass_fields__["child"]),
+        ((ChildNode("2"),), SubNode.__dataclass_fields__["child_seq"]),
     ]
 
 
@@ -846,8 +870,26 @@ def test_get_properties() -> None:
 
     assert list(node.get_properties(skip_non_init=True)) == list(no_non_init.items())
 
+    # get_properties code is compiled on the fly on the first call
+    # Test codegen of a parent class doesn't break the subclasses
+    @dataclass(frozen=True)
+    class BaseNode(ASTNode):
+        attr: str
 
-def test_get_child_nodes() -> None:
+    @dataclass(frozen=True)
+    class SubNode(BaseNode):
+        sattr: str
+
+    # trigger codegen for get_properties
+    _ = list(BaseNode("1").get_properties())
+
+    assert list(SubNode("1", "2").get_properties()) == [
+        ("1", SubNode.__dataclass_fields__["attr"]),
+        ("2", SubNode.__dataclass_fields__["sattr"]),
+    ]
+
+
+def test_get_child_nodes(clean_ser_types) -> None:
     child = ChildNode("1")
 
     mid_node = ParentNode(
@@ -868,8 +910,26 @@ def test_get_child_nodes() -> None:
 
     assert list(parent.get_child_nodes()) == [mid_node, child]
 
+    # get_child_nodes code is compiled on the fly on the first call
+    # Test codegen of a parent class doesn't break the subclasses
+    @dataclass(frozen=True)
+    class BaseNode(ASTNode):
+        child: ChildNode
 
-def test_get_child_nodes_with_field() -> None:
+    @dataclass(frozen=True)
+    class SubNode(BaseNode):
+        schild: ChildNode
+
+    # trigger codegen for get_child_nodes
+    _ = list(BaseNode(ChildNode("1")).get_child_nodes())
+
+    assert list(SubNode(ChildNode("1"), ChildNode("2")).get_child_nodes()) == [
+        ChildNode("1"),
+        ChildNode("2"),
+    ]
+
+
+def test_get_child_nodes_with_field(clean_ser_types) -> None:
     child = ChildNode("1")
 
     mid_node = ParentNode(
@@ -891,4 +951,22 @@ def test_get_child_nodes_with_field() -> None:
     assert list(parent.get_child_nodes_with_field()) == [
         (mid_node, ParentNode.__dataclass_fields__["single_child"], None),
         (child, ParentNode.__dataclass_fields__["child_seq"], 0),
+    ]
+
+    # get_child_nodes_with_field code is compiled on the fly on the first call
+    # Test codegen of a parent class doesn't break the subclasses
+    @dataclass(frozen=True)
+    class BaseNode(ASTNode):
+        child: ChildNode
+
+    @dataclass(frozen=True)
+    class SubNode(BaseNode):
+        schild: ChildNode
+
+    # trigger codegen for get_child_nodes_with_field
+    _ = list(BaseNode(ChildNode("1")).get_child_nodes_with_field())
+
+    assert list(SubNode(ChildNode("1"), ChildNode("2")).get_child_nodes_with_field()) == [
+        (ChildNode("1"), SubNode.__dataclass_fields__["child"], None),
+        (ChildNode("2"), SubNode.__dataclass_fields__["schild"], None),
     ]

@@ -148,6 +148,66 @@ def _get_next_unique_id(id_: str) -> str:
     return id_
 
 
+def _gen_and_yield_iter_child_fields(
+    self: ASTNode,
+) -> Iterable[tuple[ASTNode | tuple[ASTNode] | None, Field]]:
+    """A special function that will generate a specialized method for the class
+    of the given node on the fly and also yield from it to make sure the first
+    call to the method also works."""
+
+    # Dynamicaly generate a specialized function for this class
+    gen_iter_child_fields_func(self.__class__, _get_cls_child_fields(self.__class__))
+
+    # At this point this will call a specialized function
+    yield from self.iter_child_fields()
+
+
+def _gen_and_yield_get_properties(
+    self: ASTNode,
+    skip_id: bool = True,
+    skip_origin: bool = True,
+    skip_content_id: bool = True,
+    skip_non_compare: bool = False,
+    skip_non_init: bool = False,
+) -> Iterable[tuple[Any, Field]]:
+    """A special function that will generate a specialized method for the class
+    of the given node on the fly and also yield from it to make sure the first
+    call to the method also works."""
+    # Dynamicaly generate a specialized function for this class
+    gen_get_properties_func(self.__class__, _get_cls_props(self.__class__))
+
+    # At this point this will call a specialized function
+    yield from self.get_properties(
+        skip_id, skip_origin, skip_content_id, skip_non_compare, skip_non_init
+    )
+
+
+def _gen_and_yield_get_child_nodes(self: ASTNode) -> Iterable[ASTNode]:
+    """A special function that will generate a specialized method for the class
+    of the given node on the fly and also yield from it to make sure the first
+    call to the method also works."""
+
+    # Dynamicaly generate a specialized function for this class
+    gen_get_child_nodes_func(self.__class__, _get_cls_child_fields(self.__class__))
+
+    # At this point this will call a specialized function
+    yield from self.get_child_nodes()
+
+
+def _gen_and_yield_get_child_nodes_with_field(
+    self: ASTNode,
+) -> Iterable[tuple[ASTNode, Field, int | None]]:
+    """A special function that will generate a specialized method for the class
+    of the given node on the fly and also yield from it to make sure the first
+    call to the method also works."""
+
+    # Dynamicaly generate a specialized function for this class
+    gen_get_child_nodes_with_field_func(self.__class__, _get_cls_child_fields(self.__class__))
+
+    # At this point this will call a specialized function
+    yield from self.get_child_nodes_with_field()
+
+
 # Named Tuple for tree traversal functions
 class NodeTraversalInfo(NamedTuple):
     node: ASTNode
@@ -524,10 +584,7 @@ class ASTNode(DataClassSerializeMixin):
         """
 
         # Dynamicaly generate a specialized function for this class
-        gen_iter_child_fields_func(self.__class__, _get_cls_child_fields(self.__class__))
-
-        # At this point this will call a specialized function
-        yield from self.iter_child_fields()
+        yield from _gen_and_yield_iter_child_fields(self)
 
     def dfs(
         self,
@@ -791,21 +848,15 @@ class ASTNode(DataClassSerializeMixin):
             Iterable[tuple[Any, Field]]: An iterator of tuples of (value, field).
         """
         # Dynamicaly generate a specialized function for this class
-        gen_get_properties_func(self.__class__, _get_cls_props(self.__class__))
-
-        # At this point this will call a specialized function
-        yield from self.get_properties(
-            skip_id, skip_origin, skip_content_id, skip_non_compare, skip_non_init
+        yield from _gen_and_yield_get_properties(
+            self, skip_id, skip_origin, skip_content_id, skip_non_compare, skip_non_init
         )
 
     def get_child_nodes(self) -> Iterable[ASTNode]:
         """Returns a generator object which yields all child nodes."""
 
         # Dynamicaly generate a specialized function for this class
-        gen_get_child_nodes_func(self.__class__, _get_cls_child_fields(self.__class__))
-
-        # At this point this will call a specialized function
-        yield from self.get_child_nodes()
+        yield from _gen_and_yield_get_child_nodes(self)
 
     def get_child_nodes_with_field(
         self,
@@ -814,10 +865,7 @@ class ASTNode(DataClassSerializeMixin):
         corresponding field and index (for tuples)."""
 
         # Dynamicaly generate a specialized function for this class
-        gen_get_child_nodes_with_field_func(self.__class__, _get_cls_child_fields(self.__class__))
-
-        # At this point this will call a specialized function
-        yield from self.get_child_nodes_with_field()
+        yield from _gen_and_yield_get_child_nodes_with_field(self)
 
     def __rich__(self, parent: Tree | None = None) -> Tree:
         """Returns a tree widget for the 'rich' library."""
@@ -864,6 +912,15 @@ class ASTNode(DataClassSerializeMixin):
         # instead of the standard slow dataclass approach
         cls.__hash__ = _hash_fn  # type: ignore[assignment]
         cls.__eq__ = _eq_fn  # type: ignore[assignment]
+
+        # Make sure subclass will use the functions that generate specialized
+        # methods on the fly for each class
+        # Instead of possibly triggering base classes methods that has already
+        # been replaced with generated actual methods
+        cls.iter_child_fields = _gen_and_yield_iter_child_fields  # type: ignore[method-assign]
+        cls.get_properties = _gen_and_yield_get_properties  # type: ignore[method-assign]
+        cls.get_child_nodes = _gen_and_yield_get_child_nodes  # type: ignore[method-assign]
+        cls.get_child_nodes_with_field = _gen_and_yield_get_child_nodes_with_field  # type: ignore[method-assign]
 
         # Try checking type annotations now
         # At this point not all forward references may be resolved
