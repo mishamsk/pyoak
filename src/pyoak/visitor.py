@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import replace
 from inspect import getmembers, isfunction
 from operator import itemgetter
-from typing import Generic, Mapping, TypeVar
+from typing import Any, Generic, Mapping, TypeVar
 
 from .node import ASTNode
 
@@ -75,9 +75,7 @@ class ASTTransformVisitor(ASTVisitor[ASTNode | None]):
             as context.
     """
 
-    def _transform_children(
-        self, node: ASTNode
-    ) -> Mapping[str, ASTNode | None | list[ASTNode] | tuple[ASTNode, ...]]:
+    def _transform_children(self, node: ASTNode) -> Mapping[str, Any]:
         """Transforms the children of a given node and returns a mapping of
         field names to changes.
 
@@ -147,7 +145,7 @@ class ASTTransformVisitor(ASTVisitor[ASTNode | None]):
             return node
 
         # Return a new node with the changes
-        return replace(node, **changes)  # type: ignore[arg-type]
+        return replace(node, **changes)
 
     def transform(self, node: ASTNode) -> ASTNode | None:
         """Am alias for visit method."""
