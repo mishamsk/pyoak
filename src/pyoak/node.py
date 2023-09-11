@@ -225,7 +225,14 @@ class ASTNode(DataClassSerializeMixin):
 
     def __post_init__(self) -> None:
         if config.RUNTIME_TYPE_CHECK:
-            incorrect_fields = _check_runtime_types(self, _get_cls_all_fields(self.__class__))
+            incorrect_fields = _check_runtime_types(
+                self,
+                {
+                    f: finfo
+                    for f, finfo in _get_cls_all_fields(self.__class__).items()
+                    if f.name not in ("id", "content_id")
+                },
+            )
 
             if incorrect_fields:
                 raise InvalidTypes(incorrect_fields)
@@ -322,7 +329,7 @@ class ASTNode(DataClassSerializeMixin):
             return existing_node
 
         # Otherwise, we need to create a new node
-        new_obj = super()._deserialize(value)
+        new_obj = super(ASTNode, cls)._deserialize(value)
 
         # If the node was serialized with ID that had collision
         # After recreating the node, it may not have the collision
@@ -338,7 +345,7 @@ class ASTNode(DataClassSerializeMixin):
 
     def __post_serialize__(self, d: dict[str, Any]) -> dict[str, Any]:
         # Run first, otherwise _children will be dropped from the output
-        out = super().__post_serialize__(d)
+        out = super(ASTNode, self).__post_serialize__(d)
 
         if (
             self._get_serialization_options().get(AST_SERIALIZE_DIALECT_KEY)
@@ -867,7 +874,7 @@ class ASTNode(DataClassSerializeMixin):
                 " due to unresolved forward references."
             )
 
-        return super().__init_subclass__()
+        return super(ASTNode, cls).__init_subclass__()
 
 
 ASTNodeType = TypeVar("ASTNodeType", bound=ASTNode)

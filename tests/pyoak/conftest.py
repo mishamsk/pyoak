@@ -52,9 +52,11 @@ def pyoak_config() -> ConfigFixtureProtocol:
         config.TRACE_LOGGING = logging
         config.ID_DIGEST_SIZE = id_digest_size
         config.RUNTIME_TYPE_CHECK = runtime_checks
-        yield
-        config.TRACE_LOGGING = old_logging
-        config.ID_DIGEST_SIZE = old_id_digest_size
-        config.RUNTIME_TYPE_CHECK = old_runtime_checks
+        try:
+            yield
+        finally:
+            config.TRACE_LOGGING = old_logging
+            config.ID_DIGEST_SIZE = old_id_digest_size
+            config.RUNTIME_TYPE_CHECK = old_runtime_checks
 
     return _with_config

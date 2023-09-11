@@ -6,6 +6,7 @@ from typing import Any, ClassVar, Generator, Iterable, cast
 
 import pytest
 from deepdiff import DeepDiff
+from mashumaro.types import SerializableType
 from pyoak import config
 from pyoak.error import InvalidTypes
 from pyoak.match.error import ASTXpathDefinitionError
@@ -96,11 +97,15 @@ def test_default_origin() -> None:
     assert ChildNode("test").origin == NO_ORIGIN
 
 
+@pytest.mark.skipif(
+    not hasattr(SerializableType, "__slots__"), reason="Mashumaro version doesn't support slots"
+)
 def test_slotted() -> None:
     @dataclass(frozen=True, slots=True)
     class SlottedNode(ASTNode):
         attr: str
 
+    assert not hasattr(SlottedNode("test"), "__dict__")
     assert SlottedNode("test").origin == NO_ORIGIN
 
 
@@ -176,6 +181,15 @@ def test_runtime_type_checks(pyoak_config: ConfigFixtureProtocol) -> None:
             "child",
             "child_seq",
         }
+
+        @dataclass(frozen=True)
+        class SNode(ASTNode):
+            ninit: str = field(init=False, default=1)  # type: ignore[assignment]
+
+        with pytest.raises(InvalidTypes) as excinfo:
+            _ = SNode()
+
+        assert _get_fname_set(excinfo.value.invalid_fields) == {"ninit"}
 
 
 def test_content_id() -> None:
