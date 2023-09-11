@@ -58,36 +58,40 @@ def test_get_xpath() -> None:
     )
 
 
-def test_parent() -> None:
+def test_get_parent() -> None:
     n1 = TreeNested("test1")
     m_m = TreeMiddleSubclass(n1)
     m_r = TreeMiddle(m_m)
     r = TreeRoot((m_r,))
     r_tree = r.to_tree()
 
-    assert r_tree.parent(n1) is m_m
-    assert r_tree.parent(m_m) is m_r
-    assert r_tree.parent(m_r) is r
-    assert r_tree.parent(r) is None
+    assert r_tree.get_parent(n1) is m_m
+    assert r_tree.get_parent(m_m) is m_r
+    assert r_tree.get_parent(m_r) is r
+    assert r_tree.get_parent(r) is None
 
     with pytest.raises(KeyError):
-        r_tree.parent(TreeOtherNode("test"))
+        r_tree.get_parent(TreeOtherNode("test"))
 
 
-def test_parent_info() -> None:
+def test_get_parent_info() -> None:
     n1 = TreeNested("test1")
     m_m = TreeMiddleSubclass(n1)
     m_r = TreeMiddle(m_m)
     r = TreeRoot((m_r,))
     r_tree = r.to_tree()
 
-    assert r_tree.parent_info(n1) == (m_m, TreeMiddleSubclass.__dataclass_fields__["nested"], None)
-    assert r_tree.parent_info(m_m) == (m_r, TreeMiddle.__dataclass_fields__["nested"], None)
-    assert r_tree.parent_info(m_r) == (r, TreeRoot.__dataclass_fields__["middle_tuple"], 0)
-    assert r_tree.parent_info(r) == (None, None, None)
+    assert r_tree.get_parent_info(n1) == (
+        m_m,
+        TreeMiddleSubclass.__dataclass_fields__["nested"],
+        None,
+    )
+    assert r_tree.get_parent_info(m_m) == (m_r, TreeMiddle.__dataclass_fields__["nested"], None)
+    assert r_tree.get_parent_info(m_r) == (r, TreeRoot.__dataclass_fields__["middle_tuple"], 0)
+    assert r_tree.get_parent_info(r) == (None, None, None)
 
     with pytest.raises(KeyError):
-        r_tree.parent_info(TreeOtherNode("test"))
+        r_tree.get_parent_info(TreeOtherNode("test"))
 
 
 def test_is_root() -> None:
@@ -133,20 +137,20 @@ def test_get_depth() -> None:
         r_tree.get_depth(TreeOtherNode("test"))
 
 
-def test_ancestors() -> None:
+def test_get_ancestors() -> None:
     n1 = TreeNested("test1")
     m_m = TreeMiddleSubclass(n1)
     m_r = TreeMiddle(m_m)
     r = TreeRoot((m_r,))
     r_tree = r.to_tree()
 
-    assert tuple(r_tree.ancestors(n1)) == (m_m, m_r, r)
-    assert tuple(r_tree.ancestors(m_m)) == (m_r, r)
-    assert tuple(r_tree.ancestors(m_r)) == (r,)
-    assert tuple(r_tree.ancestors(r)) == ()
+    assert tuple(r_tree.get_ancestors(n1)) == (m_m, m_r, r)
+    assert tuple(r_tree.get_ancestors(m_m)) == (m_r, r)
+    assert tuple(r_tree.get_ancestors(m_r)) == (r,)
+    assert tuple(r_tree.get_ancestors(r)) == ()
 
     with pytest.raises(KeyError):
-        next(r_tree.ancestors(TreeOtherNode("test")))
+        next(r_tree.get_ancestors(TreeOtherNode("test")))
 
 
 def test_get_first_ancestor_of_type() -> None:

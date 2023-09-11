@@ -45,7 +45,7 @@ class Tree:
         """
         return self._node_to_xpath[node]
 
-    def parent(self, node: ASTNode) -> ASTNode | None:
+    def get_parent(self, node: ASTNode) -> ASTNode | None:
         """Get the parent of the `node`.
 
         Args:
@@ -62,7 +62,7 @@ class Tree:
 
         return self._node_to_parent_info[node].parent
 
-    def parent_info(self, node: ASTNode) -> tuple[ASTNode | None, Field | None, int | None]:
+    def get_parent_info(self, node: ASTNode) -> tuple[ASTNode | None, Field | None, int | None]:
         """Get a tuple if parent, parent field & index in the parent field.
 
         Args:
@@ -109,7 +109,7 @@ class Tree:
         if relative_to is not None and check_ancestor and not self.is_ancestor(node, relative_to):
             raise ValueError("relative_to must be an ancestor of the node")
 
-        parent = self.parent(node)
+        parent = self.get_parent(node)
         if parent is None:
             return 0
 
@@ -118,7 +118,7 @@ class Tree:
 
         return self.get_depth(parent, relative_to, False) + 1
 
-    def ancestors(self, node: ASTNode) -> Iterator[ASTNode]:
+    def get_ancestors(self, node: ASTNode) -> Iterator[ASTNode]:
         """Iterates over all ancestors of the `node`.
 
         Args:
@@ -130,10 +130,10 @@ class Tree:
         Raises:
             KeyError: If the node is not in the tree.
         """
-        parent = self.parent(node)
+        parent = self.get_parent(node)
         while parent is not None:
             yield parent
-            parent = self.parent(parent)
+            parent = self.get_parent(parent)
 
     def get_first_ancestor_of_type(
         self,
@@ -163,7 +163,7 @@ class Tree:
         else:
             ancestor_classes = ancestor_class
 
-        for ancestor in self.ancestors(node):
+        for ancestor in self.get_ancestors(node):
             if exact_type and type(ancestor) in ancestor_classes:
                 return cast(_AT, ancestor)
 
@@ -179,7 +179,7 @@ class Tree:
         Raises:
             KeyError: If the node is not in the tree.
         """
-        for a in self.ancestors(node):
+        for a in self.get_ancestors(node):
             if a is ancestor:
                 return True
 

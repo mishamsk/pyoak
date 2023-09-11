@@ -285,9 +285,9 @@ tree =root_node.to_tree()
 
 Now you can use multiple methods:
 ```python
-parent = tree.parent(node) # to get the parent of the node
+parent = tree.get_parent(node) # to get the parent of the node
 
-for ancestor in tree.ancestors(node):
+for ancestor in tree.get_ancestors(node):
     print(ancestor)
 
 parent_stmt = tree.get_first_ancestor_of_type(expr_node, Stmt)

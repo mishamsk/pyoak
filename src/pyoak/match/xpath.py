@@ -159,7 +159,7 @@ def _match_node_xpath(tree: Tree, node: ASTNode, elements: list[ASTXpathElement]
 
     # Ok, so we are somewhere in the middle (or start) of the search
     # First we need to match the current node to the current expected element
-    c_parent, c_parent_field, c_index = tree.parent_info(node)
+    c_parent, c_parent_field, c_index = tree.get_parent_info(node)
 
     if not _match_node_element(
         _NodeTraversalInfo(node, c_parent, c_parent_field, c_index), element
@@ -185,7 +185,7 @@ def _match_node_xpath(tree: Tree, node: ASTNode, elements: list[ASTXpathElement]
     # Otherwise we need to match the remaining elements to the parent
     if element.anywhere:
         # Anywhere means any ancestor can match
-        for ancestor in tree.ancestors(node):
+        for ancestor in tree.get_ancestors(node):
             if _match_node_xpath(tree, ancestor, tail):
                 return True
     else:
