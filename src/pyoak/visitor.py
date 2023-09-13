@@ -118,14 +118,9 @@ class ASTTransformVisitor(ASTVisitor[ASTNode | None]):
             return {}
 
         # Remove unchanged fields
-        unchanged_fields = set(changes.keys()) - field_names_with_changes
+        changes = {fname: changes[fname] for fname in field_names_with_changes}
 
         for fname in changes:
-            # We may have fully unchanged sequences, so we are removing them here
-            if fname in unchanged_fields:
-                changes.pop(fname)
-                continue
-
             val = changes[fname]
             if isinstance(val, list):
                 # For sequences enforce tuple

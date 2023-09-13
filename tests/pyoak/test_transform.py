@@ -27,6 +27,34 @@ class TRRootNode(ASTNode):
     child_nodes: tuple[TRParentNode, ...]
 
 
+def test_no_op_transform_visitor() -> None:
+    class TRVisitor(ASTTransformVisitor):
+        ...
+
+    tree = TRParentNode("parent", TRChildNode("keep", "1"), (TRChildNode("keep", "2"),))
+
+    assert TRVisitor().transform(tree) is tree
+
+
+def test_partial_change_transform_visitor() -> None:
+    class TRVisitor(ASTTransformVisitor):
+        def visit_TRChildNode(self, node: TRChildNode) -> TRChildNode:
+            if node.attr == "1":
+                return replace(node, attr="changed " + node.attr)
+
+            return node
+
+    tree = TRParentNode("parent", TRChildNode("keep", "1"), (TRChildNode("keep", "2"),))
+
+    new_tree = TRVisitor().transform(tree)
+
+    assert isinstance(new_tree, TRParentNode)
+    assert new_tree is not tree
+    assert new_tree.child is not tree.child
+    assert new_tree.child is not None and new_tree.child.attr == "changed 1"
+    assert new_tree.child_nodes[0] is tree.child_nodes[0]
+
+
 def test_transform_visitor() -> None:
     class TRVisitor(ASTTransformVisitor):
         def visit_TRChildNode(self, node: TRChildNode) -> TRChildNode:
