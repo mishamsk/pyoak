@@ -237,9 +237,34 @@ assert int_val is ASTNode.get_any(int_val.id)
 
 However, registry is a weak mapping, so if you don't have any references to the node anywhere, it will be garbage collected and removed from the registry.
 
+If you need to remove a node from registry while still holding a reference to it, use `ASTNode.detach` method.
+
+```python
+int_val = NumberLiteral(value=1)
+int_val.detach()
+assert NumberLiteral.get(int_val.id) is None
+```
+
 ### ~~Mutating~~ Applying Changes to a Node
 
-Nodes are immutable (to the extent possible in Python), thus if you need to change values of a node, use `dataclasses.replace` function.
+Nodes are immutable (to the extent possible in Python), thus if you need to change values of a node, use `dataclasses.replace` function. This will create a new node, while keeping the old one intact (i.e. in the registry). The latter means that even if the new node has the same "content" (e.g. when changing only non compare properties), it will still get a new unique ID.
+
+If you want to replace values & purge the old node from the registry, possibly allowing the new node to get the same ID as the original node, use `ASTNode.replace` method.
+
+```python
+@dataclasses
+class NodeWithRef(ASTNode):
+    ref_id: str = field(compare=False)
+
+node = NodeWithRef(ref_id="some_id")
+new_node = node.replace(ref_id="new_id")
+assert node is not new_node
+assert node.id == new_node.id
+assert node != new_node
+assert node.content_id == new_node.content_id
+assert node.ref_id != new_node.ref_id
+assert NodeWithRef.get(node.id) is new_node
+```
 
 ### Traversal
 

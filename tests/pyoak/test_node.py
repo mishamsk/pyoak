@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import sys
 from dataclasses import InitVar, dataclass, field
 from typing import Any, ClassVar, Generator, Iterable, cast
 
@@ -104,7 +105,8 @@ def test_default_origin() -> None:
 
 
 @pytest.mark.skipif(
-    not hasattr(SerializableType, "__slots__"), reason="Mashumaro version doesn't support slots"
+    not hasattr(SerializableType, "__slots__") or sys.version_info < (3, 11),
+    reason="Mashumaro version doesn't support slots",
 )
 def test_slotted() -> None:
     @dataclass(frozen=True, slots=True)
@@ -413,6 +415,67 @@ def test_get_any() -> None:
     del n
     gc.collect()
     assert ASTNode.get_any(n_id) is None
+
+
+def test_detach() -> None:
+    # Create a node and register it
+    node = ChildNode("node1")
+    assert ChildNode.get(node.id) is node
+
+    # Test successful detach
+    assert node.detach() is True
+    assert ChildNode.get(node.id) is None
+
+    # Test unsuccessful detach
+    assert node.detach() is False
+    assert ChildNode.get(node.id) is None
+
+
+def test_replace() -> None:
+    # Create a node and register it
+    # Use model with non compare attr to test for id collisions
+    node = NonCompareAttrNode("node1", non_compare_attr="one")
+    assert NonCompareAttrNode.get(node.id) is node
+
+    # Test successful replace
+    new_node = node.replace(attr="node2")
+    assert new_node is not node
+    assert new_node.id != node.id
+    assert new_node.attr == "node2"
+    assert new_node.non_compare_attr == "one"
+    assert new_node.non_init_attr == "test"
+    assert NonCompareAttrNode.get(node.id) is None
+    assert NonCompareAttrNode.get(new_node.id) is new_node
+
+    # Test replace with content that produces the same id
+    node = new_node
+    new_node = node.replace(non_compare_attr="two")
+    assert new_node is not node
+    assert new_node.id == node.id
+    assert new_node.is_equal(node)
+    assert new_node.non_compare_attr == "two"
+    assert new_node.non_init_attr == "test"
+    assert NonCompareAttrNode.get(new_node.id) is new_node
+
+    # Test unsuccessful replace with exception
+    with pytest.raises(ValueError):
+        new_node.replace(non_compare_attr="three", non_init_attr="three")
+
+    # validate that the node is not replaced
+    assert NonCompareAttrNode.get(new_node.id) is new_node
+
+    # Test replacing node already not in the registry (detached)
+    node = new_node
+    node.detach()
+    assert NonCompareAttrNode.get(node.id) is None
+    new_node = node.replace(attr="node3")
+    assert new_node is not node
+    assert new_node.id != node.id
+    assert new_node.attr == "node3"
+    assert new_node.non_compare_attr == "two"
+    assert new_node.non_init_attr == "test"
+    assert NonCompareAttrNode.get(node.id) is None
+    assert NonCompareAttrNode.get(new_node.id) is new_node
 
 
 def test_duplicate() -> None:

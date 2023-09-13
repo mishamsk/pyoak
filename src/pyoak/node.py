@@ -355,7 +355,7 @@ class ASTNode(DataClassSerializeMixin):
             # prone to more fluctuations based on the order of insertion.
 
             digest_increment = 1
-            while existing_node is not None and existing_node != self:
+            while existing_node is not None and not existing_node.is_equal(self):
                 new_id = hashlib.blake2b(
                     id_data.encode("utf-8"),
                     # Do not bother to check digest is within allowed size
@@ -468,6 +468,48 @@ class ASTNode(DataClassSerializeMixin):
             ASTNode | None: The node if found, otherwise the default value
         """
         return NODE_REGISTRY.get(id, default)
+
+    def detach(self) -> bool:
+        """Removes this node from the registry.
+
+        Returns:
+            bool: True if the node was removed, False if it was not in the registry
+        """
+        return NODE_REGISTRY.pop(self.id, None) is not None
+
+    def replace(self: ASTNodeType, **kwargs: Any) -> ASTNodeType:
+        """Replaces this node in the registry with a new one with the given
+        fields replaced.
+
+        The key differences vs. using `dataclasses.replace`:
+            - This method will remove the original node from the registry,
+                but only if replace succeeds.
+            - If the new node ID collides with the original node ID,
+                the new node will preserve it, because the original
+                node is purged from the registry before the new one
+                is added.
+
+        Args:
+            **kwargs (Any): The fields to replace (see dataclasses.replace
+                for more details)
+
+        Raises:
+            ValueError: see dataclasses.replace
+
+        Returns:
+            ASTNodeType: The new node
+        """
+        ori_n = NODE_REGISTRY.pop(self.id, None)
+
+        try:
+            new_node = replace(self, **kwargs)
+        except Exception as e:
+            if ori_n is not None:
+                NODE_REGISTRY[ori_n.id] = ori_n
+
+            raise e
+
+        return new_node
 
     def duplicate(self: ASTNodeType) -> ASTNodeType:
         """Creates a full duplicate of the given node, recursively duplicating
