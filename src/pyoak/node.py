@@ -242,32 +242,13 @@ class ASTNode(DataClassSerializeMixin):
             id_data.encode("utf-8"), digest_size=config.ID_DIGEST_SIZE
         ).hexdigest()
 
-        if existing_node := NODE_REGISTRY.get(new_id):
+        if new_id in NODE_REGISTRY:
             # Node with the same ID already exists
             # This may mean two things:
             # 1. The same node (equality wise) is already in the registry
             # 2. Hash collision
-            # For the latter case, we won't to rehash with a longer digest
-            # to better preserve stable IDs. This is due to the fact
-            # that the simple counting approach used in _get_next_unique_id
-            # will depend on the order and number of collided nodes, thus
-            # prone to more fluctuations based on the order of insertion.
-
-            digest_increment = 1
-            while existing_node is not None and not existing_node.is_equal(self):
-                new_id = hashlib.blake2b(
-                    id_data.encode("utf-8"),
-                    # Do not bother to check digest is within allowed size
-                    # since it allmost impossible to run out of digest size
-                    digest_size=config.ID_DIGEST_SIZE + digest_increment,
-                ).hexdigest()
-
-                existing_node = NODE_REGISTRY.get(new_id)
-                digest_increment += 1
-
-            if existing_node is not None:
-                # By now this is only possible if we are dealing with duplicate nodes
-                new_id = _get_next_unique_id(new_id)
+            # In either case, we need to generate a new ID
+            new_id = _get_next_unique_id(new_id)
 
         # Assign ID
         object.__setattr__(self, "id", new_id)
