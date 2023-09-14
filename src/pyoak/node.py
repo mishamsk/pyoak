@@ -7,7 +7,7 @@ import sys
 import weakref
 from collections import deque
 from collections.abc import Generator, Iterable
-from dataclasses import InitVar, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from inspect import getmro
 from typing import TYPE_CHECKING, Any, Callable, Deque, Mapping, NamedTuple, Sequence, TypeVar, cast
 
@@ -76,9 +76,12 @@ def _eq_fn(self: ASTNode, other: ASTNode) -> bool:
     return False
 
 
-# Hack to make dataclasses InitVar work with future annotations
-# See https://stackoverflow.com/questions/70400639/how-do-i-get-python-dataclass-initvar-fields-to-work-with-typing-get-type-hints
-InitVar.__call__ = lambda *args: None  # type: ignore
+if sys.version_info < (3, 11):
+    from dataclasses import InitVar
+
+    # Hack to make dataclasses InitVar work with future annotations
+    # See https://stackoverflow.com/questions/70400639/how-do-i-get-python-dataclass-initvar-fields-to-work-with-typing-get-type-hints
+    InitVar.__call__ = lambda *args: None  # type: ignore
 
 
 def _check_runtime_types(node: ASTNode, type_map: Mapping[Field, FieldTypeInfo]) -> Sequence[Field]:
