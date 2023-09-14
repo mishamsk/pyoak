@@ -151,11 +151,14 @@ def test_id_handling(pyoak_config: ConfigFixtureProtocol) -> None:
         # different content that will collide
         other_node = ChildNode("L3C2089KVA")
 
-        # for same value the collision resolution is via a counter
-        assert new_node.id == f"{node.id}_1"
+        assert len({node.id, new_node.id, other_node.id}) == 3
 
-        # for different values the collision resolution is via a longer digest
-        assert len(other_node.id) == 4
+        for n in (node, new_node, other_node):
+            assert n is ASTNode.get_any(n.id)
+
+        # the collision resolution is via a counter
+        assert new_node.id == f"{node.id}_1"
+        assert other_node.id == f"{node.id}_2"
 
 
 def test_runtime_type_checks(pyoak_config: ConfigFixtureProtocol) -> None:
