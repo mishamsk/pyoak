@@ -105,7 +105,7 @@ class ASTTransformVisitor(ASTVisitor[ASTNode | None]):
                     # Removed child, mark as changed field
                     field_names_with_changes.add(fname)
             else:
-                new_child = self.transform(child)
+                new_child = self.visit(child)
 
                 changes[fname] = new_child
 
@@ -142,6 +142,5 @@ class ASTTransformVisitor(ASTVisitor[ASTNode | None]):
         # Return a new node with the changes
         return replace(node, **changes)
 
-    def transform(self, node: ASTNode) -> ASTNode | None:
-        """Am alias for visit method."""
-        return self.visit(node)
+    transform = ASTVisitor[ASTNode | None].visit
+    """Am alias for visit method."""
