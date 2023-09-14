@@ -202,14 +202,12 @@ class ASTNode(DataClassSerializeMixin):
         cid_data = ""
 
         # Property values are encoded in the same way for both id's
-        for val, f in sorted(
-            self.get_properties(
-                skip_id=True,
-                skip_origin=True,
-                skip_content_id=True,
-                skip_non_compare=True,
-            ),
-            key=lambda x: x[1].name,
+        for val, f in self.get_properties(
+            skip_id=True,
+            skip_origin=True,
+            skip_content_id=True,
+            skip_non_compare=True,
+            sort_keys=True,
         ):
             cid_data += f":{f.name}="
             cid_data += f"{type(val)}({val!s})"
@@ -219,9 +217,7 @@ class ASTNode(DataClassSerializeMixin):
         # Content ID - just use class
         cid_data = self.__class__.__name__ + cid_data
 
-        for c, f, i in sorted(
-            self.get_child_nodes_with_field(), key=lambda x: (x[1].name, x[2] or -1)
-        ):
+        for c, f, i in self.get_child_nodes_with_field(sort_keys=True):
             resolved_index = i or -1
             cid_data += f":{f.name}[{resolved_index}]="
             cid_data += f"{c.content_id}"
@@ -494,11 +490,15 @@ class ASTNode(DataClassSerializeMixin):
         return PyOakTree(self)
 
     def iter_child_fields(
-        self,
+        self, *, sort_keys: bool = False
     ) -> Iterable[tuple[ASTNode | tuple[ASTNode] | None, Field]]:
         """Iterates over all child fields of this node, returning the child
         field value as-is (whether it is None, a sequence or a child node) and
         the field itself.
+
+        Args:
+            sort_keys (bool, optional): Whether to yield children by sorted field name.
+                Defaults to False, meaning children will be yielded in the order they are defined.
 
         Returns:
             Iterable[tuple[ASTNode | tuple[ASTNode] | None, Field]]:
@@ -506,7 +506,7 @@ class ASTNode(DataClassSerializeMixin):
         """
 
         # Dynamicaly generate a specialized function for this class
-        yield from gen_and_yield_iter_child_fields(self)
+        yield from gen_and_yield_iter_child_fields(self, sort_keys=sort_keys)
 
     def dfs(
         self,
@@ -756,6 +756,8 @@ class ASTNode(DataClassSerializeMixin):
         skip_content_id: bool = True,
         skip_non_compare: bool = False,
         skip_non_init: bool = False,
+        *,
+        sort_keys: bool = False,
     ) -> Iterable[tuple[Any, Field]]:
         """Returns an iterator of all properties (but not child attributes) of
         this node.
@@ -765,29 +767,47 @@ class ASTNode(DataClassSerializeMixin):
             skip_origin (bool, optional): Whether to skip the origin property. Defaults to True.
             skip_content_id (bool, optional): Whether to skip the content_id property. Defaults to True.
             skip_non_compare (bool, optional): Whether to skip properties that are not used in comparison (field.comapre is False). Defaults to False.
+            skip_non_init (bool, optional): Whether to skip properties that are not used in initialization (field.init is False). Defaults to False.
+            sort_keys (bool, optional): Whether to sort the properties by field name. Defaults to False.
 
         Yields:
             Iterable[tuple[Any, Field]]: An iterator of tuples of (value, field).
         """
         # Dynamicaly generate a specialized function for this class
         yield from gen_and_yield_get_properties(
-            self, skip_id, skip_origin, skip_content_id, skip_non_compare, skip_non_init
+            self,
+            skip_id,
+            skip_origin,
+            skip_content_id,
+            skip_non_compare,
+            skip_non_init,
+            sort_keys=sort_keys,
         )
 
-    def get_child_nodes(self) -> Iterable[ASTNode]:
-        """Returns a generator object which yields all child nodes."""
+    def get_child_nodes(self, *, sort_keys: bool = False) -> Iterable[ASTNode]:
+        """Returns a generator object which yields all child nodes.
+
+        Args:
+            sort_keys (bool, optional): Whether to yield children by sorted field name.
+                Defaults to False, meaning children will be yielded in the order they are defined.
+        """
 
         # Dynamicaly generate a specialized function for this class
-        yield from gen_and_yield_get_child_nodes(self)
+        yield from gen_and_yield_get_child_nodes(self, sort_keys=sort_keys)
 
     def get_child_nodes_with_field(
-        self,
+        self, *, sort_keys: bool = False
     ) -> Iterable[tuple[ASTNode, Field, int | None]]:
         """Returns a generator object which yields all child nodes with their
-        corresponding field and index (for tuples)."""
+        corresponding field and index (for tuples).
+
+        Args:
+            sort_keys (bool, optional): Whether to yield children by sorted field name.
+                Defaults to False, meaning children will be yielded in the order they are defined.
+        """
 
         # Dynamicaly generate a specialized function for this class
-        yield from gen_and_yield_get_child_nodes_with_field(self)
+        yield from gen_and_yield_get_child_nodes_with_field(self, sort_keys=sort_keys)
 
     def __rich__(self, parent: Tree | None = None) -> Tree:
         """Returns a tree widget for the 'rich' library."""
