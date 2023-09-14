@@ -64,7 +64,14 @@ def _hash_fn(node: ASTNode) -> int:
 def _eq_fn(self: ASTNode, other: ASTNode) -> bool:
     # Other typed as ASTNode to make mypy happy
     if other.__class__ is self.__class__:
-        return self.content_id == other.content_id and self.origin == other.origin
+        if self.content_id == other.content_id and self.origin == other.origin:
+            # If content matches and origin matches, we only need to check
+            # children origins. Content is guaranteed to be the same
+            for si, oi in zip(self.dfs(), other.dfs(), strict=True):
+                if si.node.origin != oi.node.origin:
+                    return False
+
+            return True
 
     return False
 

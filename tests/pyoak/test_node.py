@@ -514,25 +514,36 @@ def test_children() -> None:
     assert list(parent.children) == ch_nodes
 
 
-def test_is_equal() -> None:
+def test_equality() -> None:
+    # Testing the full equality (==) and content-wise equality (is_equal)
+
+    # Test euqal itself
     one = ChildNode("1", origin=origin)
     assert one.is_equal(one)
+    assert one == one
 
+    # Test different types & values
     two = ChildNode("2", origin=origin)
     other_type_ast = OtherNode("1", origin=origin)
     assert not one.is_equal("Test not ASTNode")
     assert not one.is_equal(other_type_ast)
     assert not one.is_equal(two)
+    assert one != "Test not ASTNode"
+    assert one != other_type_ast
+    assert one != two
 
+    # Test different origins
     other_origin = CodeOrigin(MemoryTextSource("test2"), get_code_range(0, 1, 0, 4, 1, 4))
     other_origin_one = ChildNode("1", origin=other_origin)
     assert one != other_origin_one
     assert one.is_equal(other_origin_one)
 
+    # Same content and origin
     collided_one = ChildNode("1", origin=origin)
     assert one == collided_one
     assert one.is_equal(collided_one)
 
+    # Test with duplicate
     duplicated_one = one.duplicate()
     assert one == duplicated_one
     assert one.is_equal(duplicated_one)
@@ -552,34 +563,35 @@ def test_is_equal() -> None:
 
     other_parent = ParentNode(
         attr="Parent",
-        single_child=ChildNode("single_child", origin=other_origin),
+        single_child=ChildNode("single_child", origin=origin),
         child_seq=(
-            ChildNode("child_list1", origin=other_origin),
-            ChildNode("child_list2", origin=other_origin),
+            ChildNode("child_list1", origin=origin),
+            ChildNode("child_list2", origin=other_origin),  # changed origin
         ),
         not_a_child_seq=(),
-        origin=other_origin,
+        origin=origin,
     )
     assert parent != other_parent
     assert parent.is_equal(other_parent)
 
     other_parent = ParentNode(
         attr="Parent",
-        single_child=ChildNode("single_child", origin=other_origin),
+        single_child=ChildNode("single_child", origin=origin),
         child_seq=(
-            ChildNode("child_list1", origin=other_origin),
-            ChildNode("child_list2-changed", origin=other_origin),
+            ChildNode("child_list1", origin=origin),
+            ChildNode("child_list2-changed", origin=origin),
         ),
         not_a_child_seq=(),
-        origin=other_origin,
+        origin=origin,
     )
     assert parent != other_parent
     assert not parent.is_equal(other_parent)
 
-    # Check hidden attrs (should not be compared)
+    # Check non-compare attrs (should not be compared)
     hidone = NonCompareAttrNode(attr="1", non_compare_attr="one", origin=origin)
     hidtwo = NonCompareAttrNode(attr="1", non_compare_attr="two", origin=origin)
     assert hidone.is_equal(hidtwo)
+    assert hidone == hidtwo
 
 
 def test_to_properties_dict() -> None:
