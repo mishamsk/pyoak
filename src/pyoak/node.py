@@ -348,7 +348,15 @@ class ASTNode(DataClassSerializeMixin):
         """
         return NODE_REGISTRY.get(id, default)
 
-    def detach(self) -> bool:
+    def detach(self) -> None:
+        """Removes this node and and the whole tree rooted with this node from
+        the registry."""
+        NODE_REGISTRY.pop(self.id, None)
+
+        for ni in self.dfs():
+            NODE_REGISTRY.pop(ni.node.id, None)
+
+    def detach_self(self) -> bool:
         """Removes this node from the registry.
 
         Returns:

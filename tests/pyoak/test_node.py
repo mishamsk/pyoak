@@ -171,7 +171,7 @@ def test_id_handling(pyoak_config: ConfigFixtureProtocol) -> None:
     onode = IdOrderTest(attr1="1", attr2="2", ch1=ChildNode("3"), ch2=ChildNode("4"))
     nid = onode.id
     ncontent_id = onode.content_id
-    onode.detach()
+    onode.detach_self()
 
     # Redefine the class with different field order
     @dataclass(frozen=True)
@@ -450,13 +450,60 @@ def test_detach() -> None:
     node = ChildNode("node1")
     assert ChildNode.get(node.id) is node
 
+    # Test detach
+    node.detach()
+    assert ChildNode.get(node.id) is None
+
+    # Test detaching a tree
+    node = ChildNode("node1")
+    och = ChildNode("och")
+
+    parent = ParentNode(
+        attr="Test",
+        single_child=node,
+        child_seq=(och,),
+        not_a_child_seq=(),
+    )
+
+    assert all(ASTNode.get_any(n.id) is n for n in (node, och, parent))
+
+    parent.detach()
+    assert all(ASTNode.get_any(n.id) is None for n in (node, och, parent))
+
+
+def test_detach_self() -> None:
+    # Create a node and register it
+    node = ChildNode("node1")
+    assert ChildNode.get(node.id) is node
+
     # Test successful detach
-    assert node.detach() is True
+    assert node.detach_self() is True
     assert ChildNode.get(node.id) is None
 
     # Test unsuccessful detach
-    assert node.detach() is False
+    assert node.detach_self() is False
     assert ChildNode.get(node.id) is None
+
+    # Test detaching parent while retaining children
+    node = ChildNode("node1")
+    och = ChildNode("och")
+
+    parent = ParentNode(
+        attr="Test",
+        single_child=node,
+        child_seq=(och,),
+        not_a_child_seq=(),
+    )
+
+    assert all(ASTNode.get_any(n.id) is n for n in (node, och, parent))
+
+    assert parent.detach_self() is True
+    assert all(ASTNode.get_any(n.id) is n for n in (node, och))
+    assert ASTNode.get_any(parent.id) is None
+
+    assert parent.detach_self() is False
+    assert all(ASTNode.get_any(n.id) is n for n in (node, och))
+    assert ASTNode.get_any(parent.id) is None
 
 
 def test_replace() -> None:
@@ -494,7 +541,7 @@ def test_replace() -> None:
 
     # Test replacing node already not in the registry (detached)
     node = new_node
-    node.detach()
+    node.detach_self()
     assert NonCompareAttrNode.get(node.id) is None
     new_node = node.replace(attr="node3")
     assert new_node is not node
