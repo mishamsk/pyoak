@@ -160,6 +160,31 @@ def test_id_handling(pyoak_config: ConfigFixtureProtocol) -> None:
         assert new_node.id == f"{node.id}_1"
         assert other_node.id == f"{node.id}_2"
 
+    # Test that changing the field order in class definition doesn't change the id
+    @dataclass(frozen=True)
+    class IdOrderTest(ASTNode):
+        attr1: str
+        attr2: str
+        ch1: ChildNode
+        ch2: ChildNode
+
+    onode = IdOrderTest(attr1="1", attr2="2", ch1=ChildNode("3"), ch2=ChildNode("4"))
+    nid = onode.id
+    ncontent_id = onode.content_id
+    onode.detach()
+
+    # Redefine the class with different field order
+    @dataclass(frozen=True)
+    class IdOrderTest(ASTNode):  # type: ignore[no-redef]
+        ch2: ChildNode
+        attr2: str
+        ch1: ChildNode
+        attr1: str
+
+    onode = IdOrderTest(attr1="1", attr2="2", ch1=ChildNode("3"), ch2=ChildNode("4"))
+    assert onode.id == nid
+    assert onode.content_id == ncontent_id
+
 
 def test_runtime_type_checks(pyoak_config: ConfigFixtureProtocol) -> None:
     # Without runtime checks
@@ -648,6 +673,21 @@ def test_iter_child_fields(clean_ser_types) -> None:
         ),
     ]
 
+    assert list(parent.iter_child_fields(sort_keys=True)) == [
+        (
+            tuple(ch_nodes[1:]),
+            ParentNode.__dataclass_fields__["child_seq"],
+        ),
+        (
+            None,
+            ParentNode.__dataclass_fields__["restricted_child"],
+        ),
+        (
+            ch_nodes[0],
+            ParentNode.__dataclass_fields__["single_child"],
+        ),
+    ]
+
     # iter_child_fields is compiled on the fly
     # Test codegen of a parent class doesn't break the subclasses
     @dataclass(frozen=True)
@@ -922,31 +962,65 @@ def test_get_properties() -> None:
     )
 
     assert list(node.get_properties()) == list(all_props.items())
+    assert list(node.get_properties(sort_keys=True)) != list(all_props.items())
+    assert dict(node.get_properties(sort_keys=True)) == all_props
 
     assert list(node.get_properties(skip_id=False)) == [
         (node.id, StaticFieldGettersTest.__dataclass_fields__["id"]),
         *list(all_props.items()),
     ]
+    assert list(node.get_properties(skip_id=False, sort_keys=True)) != [
+        (node.id, StaticFieldGettersTest.__dataclass_fields__["id"]),
+        *list(all_props.items()),
+    ]
+    assert dict(node.get_properties(skip_id=False, sort_keys=True)) == {
+        node.id: StaticFieldGettersTest.__dataclass_fields__["id"],
+        **all_props,
+    }
 
     assert list(node.get_properties(skip_content_id=False)) == [
         (node.content_id, StaticFieldGettersTest.__dataclass_fields__["content_id"]),
         *list(all_props.items()),
     ]
+    assert list(node.get_properties(skip_content_id=False, sort_keys=True)) != [
+        (node.content_id, StaticFieldGettersTest.__dataclass_fields__["content_id"]),
+        *list(all_props.items()),
+    ]
+    assert dict(node.get_properties(skip_content_id=False, sort_keys=True)) == {
+        node.content_id: StaticFieldGettersTest.__dataclass_fields__["content_id"],
+        **all_props,
+    }
 
     assert list(node.get_properties(skip_origin=False)) == [
         (origin, StaticFieldGettersTest.__dataclass_fields__["origin"]),
         *list(all_props.items()),
     ]
+    assert list(node.get_properties(skip_origin=False, sort_keys=True)) != [
+        (origin, StaticFieldGettersTest.__dataclass_fields__["origin"]),
+        *list(all_props.items()),
+    ]
+    assert dict(node.get_properties(skip_origin=False, sort_keys=True)) == {  # type: ignore[misc]
+        origin: StaticFieldGettersTest.__dataclass_fields__["origin"],
+        **all_props,
+    }
 
     no_non_compare = all_props.copy()
     no_non_compare.pop("non_compare_v")
 
     assert list(node.get_properties(skip_non_compare=True)) == list(no_non_compare.items())
+    assert list(node.get_properties(skip_non_compare=True, sort_keys=True)) != list(
+        no_non_compare.items()
+    )
+    assert dict(node.get_properties(skip_non_compare=True, sort_keys=True)) == no_non_compare
 
     no_non_init = all_props.copy()
     no_non_init.pop("default")
 
     assert list(node.get_properties(skip_non_init=True)) == list(no_non_init.items())
+    assert list(node.get_properties(skip_non_init=True, sort_keys=True)) != list(
+        no_non_init.items()
+    )
+    assert dict(node.get_properties(skip_non_init=True, sort_keys=True)) == no_non_init
 
     # get_properties code is compiled on the fly on the first call
     # Test codegen of a parent class doesn't break the subclasses
@@ -987,6 +1061,7 @@ def test_get_child_nodes(clean_ser_types) -> None:
     )
 
     assert list(parent.get_child_nodes()) == [mid_node, child]
+    assert list(parent.get_child_nodes(sort_keys=True)) == [child, mid_node]
 
     # get_child_nodes code is compiled on the fly on the first call
     # Test codegen of a parent class doesn't break the subclasses
@@ -1029,6 +1104,10 @@ def test_get_child_nodes_with_field(clean_ser_types) -> None:
     assert list(parent.get_child_nodes_with_field()) == [
         (mid_node, ParentNode.__dataclass_fields__["single_child"], None),
         (child, ParentNode.__dataclass_fields__["child_seq"], 0),
+    ]
+    assert list(parent.get_child_nodes_with_field(sort_keys=True)) == [
+        (child, ParentNode.__dataclass_fields__["child_seq"], 0),
+        (mid_node, ParentNode.__dataclass_fields__["single_child"], None),
     ]
 
     # get_child_nodes_with_field code is compiled on the fly on the first call

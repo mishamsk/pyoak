@@ -18,6 +18,10 @@ if TYPE_CHECKING:
 _IND = " " * 4
 
 
+def _indent(txt: str, times: int = 1) -> str:
+    return "\n".join([_IND * times + line if line.strip() else line for line in txt.split("\n")])
+
+
 def _gen_func(
     clz: type[ASTNode],
     fname: str,
@@ -35,7 +39,7 @@ def _gen_func(
     else:
         def_stat = f"{_IND}def {fname}(self, {extra_args}) -> {ret_type}:\n"
 
-    inner = def_stat + body
+    inner = def_stat + _indent(body, 2)
 
     # Print the code if debug is enabled
     if config.CODEGEN_DEBUG:
@@ -69,27 +73,41 @@ def _gen_get_child_nodes_func(
     # The code of the actual function
     ret_type = "Iterable[ASTNode]"
 
-    body = ""
-    # Iterate over all child fields
-    for f, type_info in child_fields.items():
-        # Store the field object in the closure
-        local_vars[f"_fld_{f.name}"] = f
-
-        if type_info.is_collection:
-            # Collection creates an for loop
-            body += f"{_IND*2}for o in self.{f.name}:\n"
-            body += f"{_IND*3}yield o\n"
-        else:
-            # Non-collection yield id child is not None
-            body += f"{_IND*2}if self.{f.name}:\n"
-            body += f"{_IND*3}yield self.{f.name}\n"
-
     # If a node doesn't have child fields, the above loop will not produce any code
     # but we need to make the function a generator, so we yield nothing
     if len(child_fields) == 0:
-        body += f"{_IND*2}yield from ()\n"
+        body = "yield from ()\n"
+    else:
+        # Iterate over all child fields and create sorted & unsroted versions
 
-    _gen_func(clz, fname, ret_type, body, local_vars)
+        # First the sorted version
+        body = "if sort_keys:\n"
+
+        def _build_body(f: Field, type_info: FieldTypeInfo) -> None:
+            nonlocal body
+
+            if type_info.is_collection:
+                # Collection creates an for loop
+                body += f"{_IND}for o in self.{f.name}:\n"
+                body += f"{_IND*2}yield o\n"
+            else:
+                # Non-collection yield id child is not None
+                body += f"{_IND}if self.{f.name}:\n"
+                body += f"{_IND*2}yield self.{f.name}\n"
+
+        for f, type_info in sorted(child_fields.items(), key=lambda x: x[0].name):
+            # Store the field object in the closure
+            local_vars[f"_fld_{f.name}"] = f
+
+            _build_body(f, type_info)
+
+        # Now the unsorted version
+        body += "else:\n"
+
+        for f, type_info in child_fields.items():
+            _build_body(f, type_info)
+
+    _gen_func(clz, fname, ret_type, body, local_vars, extra_args="sort_keys: bool = False")
 
 
 def _gen_get_child_nodes_with_field_func(
@@ -105,27 +123,41 @@ def _gen_get_child_nodes_with_field_func(
     # The code of the actual function
     ret_type = "Iterable[tuple[ASTNode, Field, int | None]]"
 
-    body = ""
-    # Iterate over all child fields
-    for f, type_info in child_fields.items():
-        # Store the field object in the closure
-        local_vars[f"_fld_{f.name}"] = f
-
-        if type_info.is_collection:
-            # Collection creates an for loop
-            body += f"{_IND*2}for i, o in enumerate(self.{f.name}):\n"
-            body += f"{_IND*3}yield o, _fld_{f.name}, i\n"
-        else:
-            # Non-collection yield id child is not None
-            body += f"{_IND*2}if self.{f.name}:\n"
-            body += f"{_IND*3}yield self.{f.name}, _fld_{f.name}, None\n"
-
     # If a node doesn't have child fields, the above loop will not produce any code
     # but we need to make the function a generator, so we yield nothing
     if len(child_fields) == 0:
-        body += f"{_IND*2}yield from ()\n"
+        body = "yield from ()\n"
+    else:
+        # Iterate over all child fields and create sorted & unsroted versions
 
-    _gen_func(clz, fname, ret_type, body, local_vars)
+        # First the sorted version
+        body = "if sort_keys:\n"
+
+        def _build_body(f: Field, type_info: FieldTypeInfo) -> None:
+            nonlocal body
+
+            if type_info.is_collection:
+                # Collection creates an for loop
+                body += f"{_IND}for i, o in enumerate(self.{f.name}):\n"
+                body += f"{_IND*2}yield o, _fld_{f.name}, i\n"
+            else:
+                # Non-collection yield id child is not None
+                body += f"{_IND}if self.{f.name}:\n"
+                body += f"{_IND*2}yield self.{f.name}, _fld_{f.name}, None\n"
+
+        for f, type_info in sorted(child_fields.items(), key=lambda x: x[0].name):
+            # Store the field object in the closure
+            local_vars[f"_fld_{f.name}"] = f
+
+            _build_body(f, type_info)
+
+        # Now the unsorted version
+        body += "else:\n"
+
+        for f, type_info in child_fields.items():
+            _build_body(f, type_info)
+
+    _gen_func(clz, fname, ret_type, body, local_vars, extra_args="sort_keys: bool = False")
 
 
 def _gen_iter_child_fields_func(
@@ -140,21 +172,35 @@ def _gen_iter_child_fields_func(
     # The code of the actual function
     ret_type = "Iterable[tuple[ASTNode | tuple[ASTNode] | None, Field]]"
 
-    body = ""
-    # Iterate over all child fields
-    for f in child_fields.keys():
-        # Store the field object in the closure
-        local_vars[f"_fld_{f.name}"] = f
-
-        # Simply yield value and field
-        body += f"{_IND*3}yield self.{f.name}, _fld_{f.name}\n"
-
     # If a node doesn't have child fields, the above loop will not produce any code
     # but we need to make the function a generator, so we yield nothing
     if len(child_fields) == 0:
-        body += f"{_IND*2}yield from ()\n"
+        body = "yield from ()\n"
+    else:
+        # Iterate over all child fields and create sorted & unsroted versions
 
-    _gen_func(clz, fname, ret_type, body, local_vars)
+        # First the sorted version
+        body = "if sort_keys:\n"
+
+        def _build_body(f: Field) -> None:
+            nonlocal body
+
+            # Simply yield value and field
+            body += f"{_IND}yield self.{f.name}, _fld_{f.name}\n"
+
+        for f in sorted(child_fields.keys(), key=lambda f: f.name):
+            # Store the field object in the closure
+            local_vars[f"_fld_{f.name}"] = f
+
+            _build_body(f)
+
+        # Now the unsorted version
+        body += "else:\n"
+
+        for f in child_fields.keys():
+            _build_body(f)
+
+    _gen_func(clz, fname, ret_type, body, local_vars, extra_args="sort_keys: bool = False")
 
 
 def _gen_get_properties_func(clz: type[ASTNode], props: Mapping[Field, FieldTypeInfo]) -> None:
@@ -167,50 +213,61 @@ def _gen_get_properties_func(clz: type[ASTNode], props: Mapping[Field, FieldType
     # The code of the actual function
     ret_type = "Iterable[tuple[Any, Field]]"
 
-    body = ""
-    # Iterate over all child fields
-    for f in props.keys():
+    # Iterate over all child fields and create sorted & unsroted versions
+
+    # First the sorted version
+    body = "if sort_keys:\n"
+
+    def _build_body(f: Field) -> None:
+        nonlocal body
+
+        if f.name == "id":
+            body += f"{_IND}if not skip_id:\n"
+            body += f"{_IND*2}yield self.id, _fld_{f.name}\n"
+            return
+
+        if f.name == "content_id":
+            body += f"{_IND}if not skip_content_id:\n"
+            body += f"{_IND*2}yield self.content_id, _fld_{f.name}\n"
+            return
+
+        if f.name == "origin":
+            body += f"{_IND}if not skip_origin:\n"
+            body += f"{_IND*2}yield self.origin, _fld_{f.name}\n"
+            return
+
+        if not f.compare:
+            body += f"{_IND}if not skip_non_compare:\n"
+            body += f"{_IND*2}yield self.{f.name}, _fld_{f.name}\n"
+            return
+
+        if not f.init:
+            body += f"{_IND}if not skip_non_init:\n"
+            body += f"{_IND*2}yield self.{f.name}, _fld_{f.name}\n"
+            return
+
+        body += f"{_IND}yield self.{f.name}, _fld_{f.name}\n"
+
+    for f in sorted(props.keys(), key=lambda f: f.name):
         # Store the field object in the closure
         local_vars[f"_fld_{f.name}"] = f
 
-        if f.name == "id":
-            body += f"{_IND*2}if not skip_id:\n"
-            body += f"{_IND*3}yield self.id, _fld_{f.name}\n"
-            continue
+        _build_body(f)
 
-        if f.name == "content_id":
-            body += f"{_IND*2}if not skip_content_id:\n"
-            body += f"{_IND*3}yield self.content_id, _fld_{f.name}\n"
-            continue
+    # Now the unsorted version
+    body += "else:\n"
 
-        if f.name == "origin":
-            body += f"{_IND*2}if not skip_origin:\n"
-            body += f"{_IND*3}yield self.origin, _fld_{f.name}\n"
-            continue
-
-        if not f.compare:
-            body += f"{_IND*2}if not skip_non_compare:\n"
-            body += f"{_IND*3}yield self.{f.name}, _fld_{f.name}\n"
-            continue
-
-        if not f.init:
-            body += f"{_IND*2}if not skip_non_init:\n"
-            body += f"{_IND*3}yield self.{f.name}, _fld_{f.name}\n"
-            continue
-
-        body += f"{_IND*2}yield self.{f.name}, _fld_{f.name}\n"
-
-    # If a node doesn't have child fields, the above loop will not produce any code
-    # but we need to make the function a generator, so we yield nothing
-    if len(props) == 0:
-        body += f"{_IND*2}yield from ()\n"
+    for f in props.keys():
+        _build_body(f)
 
     extra_args = """
         skip_id: bool = True,
         skip_origin: bool = True,
         skip_content_id: bool = True,
         skip_non_compare: bool = False,
-        skip_non_init: bool = False
+        skip_non_init: bool = False,
+        *,
+        sort_keys: bool = False,
     """.strip().replace(
         "\n", ""
     )
@@ -219,7 +276,7 @@ def _gen_get_properties_func(clz: type[ASTNode], props: Mapping[Field, FieldType
 
 
 def gen_and_yield_iter_child_fields(
-    self: ASTNode,
+    self: ASTNode, *, sort_keys: bool = False
 ) -> Iterable[tuple[ASTNode | tuple[ASTNode] | None, Field]]:
     """A special function that will generate a specialized method for the class
     of the given node on the fly and also yield from it to make sure the first
@@ -229,7 +286,7 @@ def gen_and_yield_iter_child_fields(
     _gen_iter_child_fields_func(self.__class__, get_cls_child_fields(self.__class__))
 
     # At this point this will call a specialized function
-    yield from self.iter_child_fields()
+    yield from self.iter_child_fields(sort_keys=sort_keys)
 
 
 def gen_and_yield_get_properties(
@@ -239,6 +296,8 @@ def gen_and_yield_get_properties(
     skip_content_id: bool = True,
     skip_non_compare: bool = False,
     skip_non_init: bool = False,
+    *,
+    sort_keys: bool = False,
 ) -> Iterable[tuple[Any, Field]]:
     """A special function that will generate a specialized method for the class
     of the given node on the fly and also yield from it to make sure the first
@@ -248,11 +307,11 @@ def gen_and_yield_get_properties(
 
     # At this point this will call a specialized function
     yield from self.get_properties(
-        skip_id, skip_origin, skip_content_id, skip_non_compare, skip_non_init
+        skip_id, skip_origin, skip_content_id, skip_non_compare, skip_non_init, sort_keys=sort_keys
     )
 
 
-def gen_and_yield_get_child_nodes(self: ASTNode) -> Iterable[ASTNode]:
+def gen_and_yield_get_child_nodes(self: ASTNode, *, sort_keys: bool = False) -> Iterable[ASTNode]:
     """A special function that will generate a specialized method for the class
     of the given node on the fly and also yield from it to make sure the first
     call to the method also works."""
@@ -261,11 +320,11 @@ def gen_and_yield_get_child_nodes(self: ASTNode) -> Iterable[ASTNode]:
     _gen_get_child_nodes_func(self.__class__, get_cls_child_fields(self.__class__))
 
     # At this point this will call a specialized function
-    yield from self.get_child_nodes()
+    yield from self.get_child_nodes(sort_keys=sort_keys)
 
 
 def gen_and_yield_get_child_nodes_with_field(
-    self: ASTNode,
+    self: ASTNode, *, sort_keys: bool = False
 ) -> Iterable[tuple[ASTNode, Field, int | None]]:
     """A special function that will generate a specialized method for the class
     of the given node on the fly and also yield from it to make sure the first
@@ -275,4 +334,4 @@ def gen_and_yield_get_child_nodes_with_field(
     _gen_get_child_nodes_with_field_func(self.__class__, get_cls_child_fields(self.__class__))
 
     # At this point this will call a specialized function
-    yield from self.get_child_nodes_with_field()
+    yield from self.get_child_nodes_with_field(sort_keys=sort_keys)
