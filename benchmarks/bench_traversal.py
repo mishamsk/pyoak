@@ -1,6 +1,5 @@
-from __future__ import annotations
-
 import math
+import time
 import timeit
 from dataclasses import dataclass, field
 
@@ -46,16 +45,18 @@ def run_benchmark():
     TREE_MAX_SIZE = 1000000
     DEPTH = 18
     max_nodes = math.floor(math.pow(TREE_MAX_SIZE, 1 / DEPTH))
+
+    st = time.monotonic()
     tree = gen_sample_tree(DEPTH, max_nodes)
 
-    print(f"Tree size: {COUNTER}")
+    print(f"Time to build tree with {COUNTER} nodes: {time.monotonic() - st:.6f} seconds")
 
     n = 10
-    time = timeit.timeit(lambda: list(tree.dfs()), number=n)
-    print(f"Stack based DFS (tree size: {COUNTER}, invocations: {n}): {time:.6f} seconds")
+    ttime = timeit.timeit(lambda: list(tree.dfs()), number=n)
+    print(f"Stack based DFS (tree size: {COUNTER}, invocations: {n}): {ttime:.6f} seconds")
 
-    time = timeit.timeit(lambda: list(tree.bfs()), number=n)
-    print(f"Queue based BFS (tree size: {COUNTER}, invocations: {n}): {time:.6f} seconds")
+    ttime = timeit.timeit(lambda: list(tree.bfs()), number=n)
+    print(f"Queue based BFS (tree size: {COUNTER}, invocations: {n}): {ttime:.6f} seconds")
 
 
 if __name__ == "__main__":
