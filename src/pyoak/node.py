@@ -16,15 +16,16 @@ from rich.tree import Tree
 
 from . import config
 from .codegen import (
-    gen_get_child_nodes_func,
-    gen_get_child_nodes_with_field_func,
-    gen_get_properties_func,
-    gen_iter_child_fields_func,
+    gen_and_yield_get_child_nodes,
+    gen_and_yield_get_child_nodes_with_field,
+    gen_and_yield_get_properties,
+    gen_and_yield_iter_child_fields,
 )
 from .error import InvalidTypes
 from .origin import NO_ORIGIN, Origin
 from .serialize import TYPE_KEY, DataClassSerializeMixin
-from .typing import Field, FieldTypeInfo, check_annotations, is_instance, process_node_fields
+from .types import get_cls_all_fields, get_cls_child_fields, get_cls_props
+from .typing import Field, FieldTypeInfo, check_annotations, is_instance
 
 if TYPE_CHECKING:
     from .match.xpath import ASTXpath
@@ -72,55 +73,6 @@ def _eq_fn(self: ASTNode, other: ASTNode) -> bool:
 # See https://stackoverflow.com/questions/70400639/how-do-i-get-python-dataclass-initvar-fields-to-work-with-typing-get-type-hints
 InitVar.__call__ = lambda *args: None  # type: ignore
 
-# Cached mappings of ASTNode subclasses to their properties and child fields
-_TYPE_TO_ALL_FIELDS: dict[type[ASTNode], Mapping[Field, FieldTypeInfo]] = {}
-_TYPE_TO_CHILD_FIELDS: dict[type[ASTNode], Mapping[Field, FieldTypeInfo]] = {}
-_TYPE_TO_PROPS: dict[type[ASTNode], Mapping[Field, FieldTypeInfo]] = {}
-
-
-def _populate_type_dicts(cls: type[ASTNode]) -> None:
-    """Returns a tuple of all fields of the given class."""
-    _TYPE_TO_CHILD_FIELDS[cls], _TYPE_TO_PROPS[cls] = process_node_fields(cls, ASTNode)
-
-    _TYPE_TO_ALL_FIELDS[cls] = {
-        **_TYPE_TO_CHILD_FIELDS[cls],
-        **_TYPE_TO_PROPS[cls],
-    }
-
-
-def _get_cls_all_fields(cls: type[ASTNode]) -> Mapping[Field, FieldTypeInfo]:
-    """Returns a tuple of all fields of the given class."""
-    if cls not in _TYPE_TO_ALL_FIELDS:
-        _populate_type_dicts(cls)
-
-    return _TYPE_TO_ALL_FIELDS[cls]
-
-
-def _get_cls_child_fields(cls: type[ASTNode]) -> Mapping[Field, FieldTypeInfo]:
-    """Returns a tuple of all child fields of the given class.
-
-    Raises:
-        InvalidFieldTypes: If the class has fields with mixed ASTNode subclasses and regular types or
-            unsupported child fileds types (e.g. mutable collections of ASTNode's).
-    """
-    if cls not in _TYPE_TO_CHILD_FIELDS:
-        _populate_type_dicts(cls)
-
-    return _TYPE_TO_CHILD_FIELDS[cls]
-
-
-def _get_cls_props(cls: type[ASTNode]) -> Mapping[Field, FieldTypeInfo]:
-    """Returns a tuple of all properties of the given class.
-
-    Raises:
-        InvalidFieldTypes: If the class has fields with mixed ASTNode subclasses and regular types or
-            unsupported child fileds types (e.g. mutable collections of ASTNode's).
-    """
-    if cls not in _TYPE_TO_PROPS:
-        _populate_type_dicts(cls)
-
-    return _TYPE_TO_PROPS[cls]
-
 
 def _check_runtime_types(node: ASTNode, type_map: Mapping[Field, FieldTypeInfo]) -> Sequence[Field]:
     incorrect_fields: list[Field] = []
@@ -146,66 +98,6 @@ def _get_next_unique_id(id_: str) -> str:
         i += 1
 
     return id_
-
-
-def _gen_and_yield_iter_child_fields(
-    self: ASTNode,
-) -> Iterable[tuple[ASTNode | tuple[ASTNode] | None, Field]]:
-    """A special function that will generate a specialized method for the class
-    of the given node on the fly and also yield from it to make sure the first
-    call to the method also works."""
-
-    # Dynamicaly generate a specialized function for this class
-    gen_iter_child_fields_func(self.__class__, _get_cls_child_fields(self.__class__))
-
-    # At this point this will call a specialized function
-    yield from self.iter_child_fields()
-
-
-def _gen_and_yield_get_properties(
-    self: ASTNode,
-    skip_id: bool = True,
-    skip_origin: bool = True,
-    skip_content_id: bool = True,
-    skip_non_compare: bool = False,
-    skip_non_init: bool = False,
-) -> Iterable[tuple[Any, Field]]:
-    """A special function that will generate a specialized method for the class
-    of the given node on the fly and also yield from it to make sure the first
-    call to the method also works."""
-    # Dynamicaly generate a specialized function for this class
-    gen_get_properties_func(self.__class__, _get_cls_props(self.__class__))
-
-    # At this point this will call a specialized function
-    yield from self.get_properties(
-        skip_id, skip_origin, skip_content_id, skip_non_compare, skip_non_init
-    )
-
-
-def _gen_and_yield_get_child_nodes(self: ASTNode) -> Iterable[ASTNode]:
-    """A special function that will generate a specialized method for the class
-    of the given node on the fly and also yield from it to make sure the first
-    call to the method also works."""
-
-    # Dynamicaly generate a specialized function for this class
-    gen_get_child_nodes_func(self.__class__, _get_cls_child_fields(self.__class__))
-
-    # At this point this will call a specialized function
-    yield from self.get_child_nodes()
-
-
-def _gen_and_yield_get_child_nodes_with_field(
-    self: ASTNode,
-) -> Iterable[tuple[ASTNode, Field, int | None]]:
-    """A special function that will generate a specialized method for the class
-    of the given node on the fly and also yield from it to make sure the first
-    call to the method also works."""
-
-    # Dynamicaly generate a specialized function for this class
-    gen_get_child_nodes_with_field_func(self.__class__, _get_cls_child_fields(self.__class__))
-
-    # At this point this will call a specialized function
-    yield from self.get_child_nodes_with_field()
 
 
 # Named Tuple for tree traversal functions
@@ -289,7 +181,7 @@ class ASTNode(DataClassSerializeMixin):
                 self,
                 {
                     f: finfo
-                    for f, finfo in _get_cls_all_fields(self.__class__).items()
+                    for f, finfo in get_cls_all_fields(self.__class__).items()
                     if f.name not in ("id", "content_id")
                 },
             )
@@ -412,7 +304,7 @@ class ASTNode(DataClassSerializeMixin):
             == ASTSerializationDialects.AST_EXPLORER
         ):
             out["_children"] = []
-            out["_children"].extend([f.name for f in _get_cls_child_fields(self.__class__)])
+            out["_children"].extend([f.name for f in get_cls_child_fields(self.__class__)])
 
         if (
             self._get_serialization_options().get(AST_SERIALIZE_DIALECT_KEY)
@@ -626,7 +518,7 @@ class ASTNode(DataClassSerializeMixin):
         """
 
         # Dynamicaly generate a specialized function for this class
-        yield from _gen_and_yield_iter_child_fields(self)
+        yield from gen_and_yield_iter_child_fields(self)
 
     def dfs(
         self,
@@ -833,7 +725,7 @@ class ASTNode(DataClassSerializeMixin):
             Iterable[tuple[str, Field]]: An iterator of tuples of (field name, field).
         """
 
-        for f in _get_cls_props(cls):
+        for f in get_cls_props(cls):
             # Skip id
             if (f.name == "id") and skip_id:
                 continue
@@ -867,7 +759,7 @@ class ASTNode(DataClassSerializeMixin):
             Mapping[Field, ChildFieldTypeInfo]:
                 A mapping of child attribute name to (field, type_info).
         """
-        return _get_cls_child_fields(cls)
+        return get_cls_child_fields(cls)
 
     def get_properties(
         self,
@@ -890,7 +782,7 @@ class ASTNode(DataClassSerializeMixin):
             Iterable[tuple[Any, Field]]: An iterator of tuples of (value, field).
         """
         # Dynamicaly generate a specialized function for this class
-        yield from _gen_and_yield_get_properties(
+        yield from gen_and_yield_get_properties(
             self, skip_id, skip_origin, skip_content_id, skip_non_compare, skip_non_init
         )
 
@@ -898,7 +790,7 @@ class ASTNode(DataClassSerializeMixin):
         """Returns a generator object which yields all child nodes."""
 
         # Dynamicaly generate a specialized function for this class
-        yield from _gen_and_yield_get_child_nodes(self)
+        yield from gen_and_yield_get_child_nodes(self)
 
     def get_child_nodes_with_field(
         self,
@@ -907,7 +799,7 @@ class ASTNode(DataClassSerializeMixin):
         corresponding field and index (for tuples)."""
 
         # Dynamicaly generate a specialized function for this class
-        yield from _gen_and_yield_get_child_nodes_with_field(self)
+        yield from gen_and_yield_get_child_nodes_with_field(self)
 
     def __rich__(self, parent: Tree | None = None) -> Tree:
         """Returns a tree widget for the 'rich' library."""
@@ -959,10 +851,10 @@ class ASTNode(DataClassSerializeMixin):
         # methods on the fly for each class
         # Instead of possibly triggering base classes methods that has already
         # been replaced with generated actual methods
-        cls.iter_child_fields = _gen_and_yield_iter_child_fields  # type: ignore[method-assign]
-        cls.get_properties = _gen_and_yield_get_properties  # type: ignore[method-assign]
-        cls.get_child_nodes = _gen_and_yield_get_child_nodes  # type: ignore[method-assign]
-        cls.get_child_nodes_with_field = _gen_and_yield_get_child_nodes_with_field  # type: ignore[method-assign]
+        cls.iter_child_fields = gen_and_yield_iter_child_fields  # type: ignore[method-assign]
+        cls.get_properties = gen_and_yield_get_properties  # type: ignore[method-assign]
+        cls.get_child_nodes = gen_and_yield_get_child_nodes  # type: ignore[method-assign]
+        cls.get_child_nodes_with_field = gen_and_yield_get_child_nodes_with_field  # type: ignore[method-assign]
 
         # Try checking type annotations now
         # At this point not all forward references may be resolved
