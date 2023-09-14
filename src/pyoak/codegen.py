@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Iterable, Mapping
+
+from pyoak.types import get_cls_child_fields, get_cls_props
 
 from . import config
 
@@ -55,7 +57,7 @@ def _gen_func(
     setattr(clz, new_f.__name__, new_f)
 
 
-def gen_get_child_nodes_func(
+def _gen_get_child_nodes_func(
     clz: type[ASTNode], child_fields: Mapping[Field, FieldTypeInfo]
 ) -> None:
     """Generate a specialized function for getting all child nodes."""
@@ -90,7 +92,7 @@ def gen_get_child_nodes_func(
     _gen_func(clz, fname, ret_type, body, local_vars)
 
 
-def gen_get_child_nodes_with_field_func(
+def _gen_get_child_nodes_with_field_func(
     clz: type[ASTNode], child_fields: Mapping[Field, FieldTypeInfo]
 ) -> None:
     """Generate a specialized function for getting child nodes with their
@@ -126,7 +128,7 @@ def gen_get_child_nodes_with_field_func(
     _gen_func(clz, fname, ret_type, body, local_vars)
 
 
-def gen_iter_child_fields_func(
+def _gen_iter_child_fields_func(
     clz: type[ASTNode], child_fields: Mapping[Field, FieldTypeInfo]
 ) -> None:
     """Generate a specialized `iter_child_fields` function."""
@@ -155,7 +157,7 @@ def gen_iter_child_fields_func(
     _gen_func(clz, fname, ret_type, body, local_vars)
 
 
-def gen_get_properties_func(clz: type[ASTNode], props: Mapping[Field, FieldTypeInfo]) -> None:
+def _gen_get_properties_func(clz: type[ASTNode], props: Mapping[Field, FieldTypeInfo]) -> None:
     """Generate a specialized `get_properties` function."""
     fname = "get_properties"
 
@@ -214,3 +216,63 @@ def gen_get_properties_func(clz: type[ASTNode], props: Mapping[Field, FieldTypeI
     )
 
     _gen_func(clz, fname, ret_type, body, local_vars, extra_args=extra_args)
+
+
+def gen_and_yield_iter_child_fields(
+    self: ASTNode,
+) -> Iterable[tuple[ASTNode | tuple[ASTNode] | None, Field]]:
+    """A special function that will generate a specialized method for the class
+    of the given node on the fly and also yield from it to make sure the first
+    call to the method also works."""
+
+    # Dynamicaly generate a specialized function for this class
+    _gen_iter_child_fields_func(self.__class__, get_cls_child_fields(self.__class__))
+
+    # At this point this will call a specialized function
+    yield from self.iter_child_fields()
+
+
+def gen_and_yield_get_properties(
+    self: ASTNode,
+    skip_id: bool = True,
+    skip_origin: bool = True,
+    skip_content_id: bool = True,
+    skip_non_compare: bool = False,
+    skip_non_init: bool = False,
+) -> Iterable[tuple[Any, Field]]:
+    """A special function that will generate a specialized method for the class
+    of the given node on the fly and also yield from it to make sure the first
+    call to the method also works."""
+    # Dynamicaly generate a specialized function for this class
+    _gen_get_properties_func(self.__class__, get_cls_props(self.__class__))
+
+    # At this point this will call a specialized function
+    yield from self.get_properties(
+        skip_id, skip_origin, skip_content_id, skip_non_compare, skip_non_init
+    )
+
+
+def gen_and_yield_get_child_nodes(self: ASTNode) -> Iterable[ASTNode]:
+    """A special function that will generate a specialized method for the class
+    of the given node on the fly and also yield from it to make sure the first
+    call to the method also works."""
+
+    # Dynamicaly generate a specialized function for this class
+    _gen_get_child_nodes_func(self.__class__, get_cls_child_fields(self.__class__))
+
+    # At this point this will call a specialized function
+    yield from self.get_child_nodes()
+
+
+def gen_and_yield_get_child_nodes_with_field(
+    self: ASTNode,
+) -> Iterable[tuple[ASTNode, Field, int | None]]:
+    """A special function that will generate a specialized method for the class
+    of the given node on the fly and also yield from it to make sure the first
+    call to the method also works."""
+
+    # Dynamicaly generate a specialized function for this class
+    _gen_get_child_nodes_with_field_func(self.__class__, get_cls_child_fields(self.__class__))
+
+    # At this point this will call a specialized function
+    yield from self.get_child_nodes_with_field()
