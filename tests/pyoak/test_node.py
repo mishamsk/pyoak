@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import gc
-import sys
 from dataclasses import InitVar, dataclass, field
 from typing import Any, ClassVar, Generator, Iterable, cast
 
@@ -105,7 +104,7 @@ def test_default_origin() -> None:
 
 
 @pytest.mark.skipif(
-    not hasattr(SerializableType, "__slots__") or sys.version_info < (3, 11),
+    not hasattr(SerializableType, "__slots__"),
     reason="Mashumaro version doesn't support slots",
 )
 def test_slotted() -> None:

@@ -32,14 +32,6 @@ if TYPE_CHECKING:
     from .tree import Tree as PyOakTree
     from .visitor import ASTVisitor
 
-_dataclass_extra_args: dict[str, bool] = {}
-if sys.version_info >= (3, 11):
-    # We rely on weakref slot, which is only available in py3.11+ for dataclasses
-    # Also slots are only possible with mashumaro supporting SerializableType with slots
-    from mashumaro.types import SerializableType
-
-    if hasattr(SerializableType, "__slots__"):
-        _dataclass_extra_args = dict(slots=True, weakref_slot=True)
 
 logger = logging.getLogger(__name__)
 
@@ -126,8 +118,15 @@ class ASTSerializationDialects(enum.Enum):
     AST_TEST = enum.auto()
 
 
-@dataclass(frozen=True, **_dataclass_extra_args)
-class ASTNode(DataClassSerializeMixin):
+# dataclasses prior to py3.11 didn't support __weakref__ slot
+# so in order to make a universally supported base class
+# we need to add it manually via a mixin
+class _WeakRefSlot:
+    __slots__ = ("__weakref__",)
+
+
+@dataclass(frozen=True, slots=True)
+class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
     """A base class for all AST Node classes.
 
     Provides the following functions:
