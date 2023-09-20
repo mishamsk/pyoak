@@ -3,103 +3,38 @@ from __future__ import annotations
 import enum
 import hashlib
 import logging
-import sys
-import weakref
 from collections import deque
 from collections.abc import Generator, Iterable
-from dataclasses import dataclass, field, replace
-from inspect import getmro
+from dataclasses import InitVar, dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Callable, Deque, Mapping, NamedTuple, Sequence, TypeVar, cast
 
 from rich.markup import escape
 from rich.tree import Tree
 
 from . import config
+from ._methods import eq_fn, hash_fn
 from .codegen import (
     gen_and_yield_get_child_nodes,
     gen_and_yield_get_child_nodes_with_field,
     gen_and_yield_get_properties,
     gen_and_yield_iter_child_fields,
 )
-from .error import InvalidTypes
+from .error import ASTRefCollisionError, InvalidTypes
 from .origin import NO_ORIGIN, Origin
+from .registry import _get_node, _pop_node, _register, _register_with_ref
 from .serialize import TYPE_KEY, DataClassSerializeMixin
 from .types import get_cls_all_fields, get_cls_child_fields, get_cls_props
-from .typing import Field, FieldTypeInfo, check_annotations, is_instance
+from .typing import Field, FieldTypeInfo, check_annotations, check_runtime_types
 
 if TYPE_CHECKING:
     from .match.xpath import ASTXpath
     from .tree import Tree as PyOakTree
-    from .visitor import ASTVisitor
 
 
 logger = logging.getLogger(__name__)
 
 
-_VRT = TypeVar("_VRT")
-
-
-# A sentinel object to detect if a parameter is supplied or not.
-# Use a subclass of str to make typing happy.
-class _UNSET_ID_TYPE(str):
-    pass
-
-
-_UNSET_ID = _UNSET_ID_TYPE()
-
-
-# Alternative implementations of dunder methods
-def _hash_fn(node: ASTNode) -> int:
-    return hash(node.id)
-
-
-def _eq_fn(self: ASTNode, other: ASTNode) -> bool:
-    # Other typed as ASTNode to make mypy happy
-    if other.__class__ is self.__class__:
-        if self.content_id == other.content_id and self.origin == other.origin:
-            # If content matches and origin matches, we only need to check
-            # children origins. Content is guaranteed to be the same
-            for si, oi in zip(self.dfs(), other.dfs(), strict=True):
-                if si.node.origin != oi.node.origin:
-                    return False
-
-            return True
-
-    return False
-
-
-if sys.version_info < (3, 11):
-    from dataclasses import InitVar
-
-    # Hack to make dataclasses InitVar work with future annotations
-    # See https://stackoverflow.com/questions/70400639/how-do-i-get-python-dataclass-initvar-fields-to-work-with-typing-get-type-hints
-    InitVar.__call__ = lambda *args: None  # type: ignore
-
-
-def _check_runtime_types(node: ASTNode, type_map: Mapping[Field, FieldTypeInfo]) -> Sequence[Field]:
-    incorrect_fields: list[Field] = []
-
-    for f, type_info in type_map.items():
-        val = getattr(node, f.name)
-        if not is_instance(val, type_info.resolved_type):
-            incorrect_fields.append(f)
-
-    return incorrect_fields
-
-
-NODE_REGISTRY: weakref.WeakValueDictionary[str, ASTNode] = weakref.WeakValueDictionary()
-"""Registry of all node objects."""
-
-
-def _get_next_unique_id(id_: str) -> str:
-    """Return a unique ID."""
-    i = 1
-    original_id = id_
-    while NODE_REGISTRY.get(id_) is not None:
-        id_ = f"{original_id}_{i}"
-        i += 1
-
-    return id_
+_ASTNodeType = TypeVar("_ASTNodeType", bound="ASTNode")
 
 
 # Named Tuple for tree traversal functions
@@ -118,15 +53,25 @@ class ASTSerializationDialects(enum.Enum):
     AST_TEST = enum.auto()
 
 
+_REF_ATTR = "__node_ref__"
+
+
+def _attach(node: ASTNode, ref_id: str) -> None:
+    if not _register_with_ref(node, ref_id):
+        raise ASTRefCollisionError(ref_id)
+
+    object.__setattr__(node, _REF_ATTR, ref_id)
+
+
 # dataclasses prior to py3.11 didn't support __weakref__ slot
 # so in order to make a universally supported base class
 # we need to add it manually via a mixin
-class _WeakRefSlot:
-    __slots__ = ("__weakref__",)
+class _NodeSlots:
+    __slots__ = ("__weakref__", _REF_ATTR)
 
 
 @dataclass(frozen=True, slots=True)
-class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
+class ASTNode(DataClassSerializeMixin, _NodeSlots):
     """A base class for all AST Node classes.
 
     Provides the following functions:
@@ -138,13 +83,13 @@ class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
 
     Notes:
         - Subclasses must be frozen dataclasses
-        - Subclasses may be slotted, but this would prevent using multiple inheritance
+        - Subclasses may be slotted, but remember that in multiple inheritance, only one base can have non-empty slots
         - Fields typed as union of subclasses of ASTNode or None as well as tuples of ASTNode subclasses
             are considered children. All other types that have ASTNode subclasses in signature
             will trigger an error.
     """
 
-    id: str = field(default=_UNSET_ID, init=False, compare=False)
+    id: str = field(init=False, compare=False)
     """The unique ID of this node. It will be auto-generated based on the
     node's properties and origin. Uniqueness is ensured for all nodes in the
     registry, thus as long as an identical node is in memory, a new node will
@@ -161,11 +106,7 @@ class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
         Instead use properties to store natural (e.g. source system) identifiers of the node.
     """
 
-    content_id: str = field(
-        default=_UNSET_ID,
-        init=False,
-        compare=False,
-    )
+    content_id: str = field(init=False, compare=False)
     """The ID of this node based on it's content (i.e. properties and
     children).
 
@@ -184,9 +125,11 @@ class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
     path, as well as position within the source (e.g. char index)
     """
 
-    def __post_init__(self) -> None:
+    attached: InitVar[bool] = field(default=False, kw_only=True)
+
+    def __post_init__(self, attached: bool) -> None:
         if config.RUNTIME_TYPE_CHECK:
-            incorrect_fields = _check_runtime_types(
+            incorrect_fields = check_runtime_types(
                 self,
                 {
                     f: finfo
@@ -235,55 +178,49 @@ class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
             ).hexdigest(),
         )
 
-        # Generate ID
-        new_id = hashlib.blake2b(
-            id_data.encode("utf-8"), digest_size=config.ID_DIGEST_SIZE
-        ).hexdigest()
-
-        if new_id in NODE_REGISTRY:
-            # Node with the same ID already exists
-            # This may mean two things:
-            # 1. The same node (equality wise) is already in the registry
-            # 2. Hash collision
-            # In either case, we need to generate a new ID
-            new_id = _get_next_unique_id(new_id)
-
         # Assign ID
-        object.__setattr__(self, "id", new_id)
+        object.__setattr__(
+            self,
+            "id",
+            hashlib.blake2b(id_data.encode("utf-8"), digest_size=config.ID_DIGEST_SIZE).hexdigest(),
+        )
 
-        # Register in the registry
-        NODE_REGISTRY[new_id] = self
+        # Attach to registry if needed
+        if attached:
+            object.__setattr__(self, _REF_ATTR, _register(self))
+
+    @property
+    def ref(self) -> str | None:
+        """The registry reference of this node if it is attached."""
+        return getattr(self, _REF_ATTR, None)
+
+    @property
+    def ref_or_raise(self) -> str:
+        """The registry reference of this node if it is attached or raise
+        AttributeError if not."""
+        return cast(str, getattr(self, _REF_ATTR))
 
     @classmethod
     def _deserialize(cls, value: dict[str, Any]) -> ASTNode:
-        # Id must exist in the serialized data, otherwise
-        # it is a corrupt data
-        existing_node = NODE_REGISTRY.get(value["id"])
+        # Get an optional ref value (to be non-destructive, mashumaro allows extra fields)
+        ref_id = value.get(_REF_ATTR, None)
 
-        # If >1 node was serialized with the same ID
-        # it must have been the same object in memory
-        # thus we want to deserialize it as the same object
-        if existing_node is not None:
-            return existing_node
-
-        # Otherwise, we need to create a new node
+        # create a new node as usual
         new_obj = super(ASTNode, cls)._deserialize(value)
 
-        # If the node was serialized with ID that had collision
-        # After recreating the node, it may not have the collision
-        # yet and thus will have a different ID. We need to force
-        # the ID to be the same as the serialized one and replace
-        # the node in the registry
-        if new_obj.id != value["id"]:
-            NODE_REGISTRY.pop(new_obj.id)
-            object.__setattr__(new_obj, "id", value["id"])
-            NODE_REGISTRY[value["id"]] = new_obj
+        # If the node was serialized with ref, try to register it
+        if ref_id is not None:
+            _attach(new_obj, ref_id)
 
         return new_obj
 
     def __post_serialize__(self, d: dict[str, Any]) -> dict[str, Any]:
         # Run first, otherwise _children will be dropped from the output
         out = super(ASTNode, self).__post_serialize__(d)
+
+        # Save ref value if it exists
+        if self.ref is not None:
+            out[_REF_ATTR] = self.ref
 
         if (
             self._get_serialization_options().get(AST_SERIALIZE_DIALECT_KEY)
@@ -304,17 +241,29 @@ class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
 
         return out
 
+    def to_attached(self: _ASTNodeType) -> _ASTNodeType:
+        """Returns an attached copy of this node.
+
+        If the node is already attached, returns itself.
+        """
+        if self.ref is not None:
+            return self
+
+        return replace(self, attached=True)
+
     @classmethod
     def get(
-        cls: type[ASTNodeType],
-        id: str,
-        default: ASTNodeType | None = None,
+        cls: type[_ASTNodeType],
+        ref: str | None,
+        default: _ASTNodeType | None = None,
         strict: bool = True,
-    ) -> ASTNodeType | None:
+    ) -> _ASTNodeType | None:
         """Gets a node of this class type from the AST registry.
 
+        Only nodes that were previously added to the registry via `ASTNode.get_ref` method can be retrieved.
+
         Args:
-            id (str): The id of the node to get
+            ref (str | None): The ref value of the node to get. None is for convenience, since nodes may not have a ref value.
             default (ASTNodeType | None, optional): The default value to return if the node is not found.
                 Defaults to None.
             strict (bool, optional): If True, only a node of this class type is returned.
@@ -323,7 +272,10 @@ class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
         Returns:
             ASTNodeType | None: The node if found, otherwise the default value
         """
-        ret = NODE_REGISTRY.get(id)
+        if ref is None:
+            return default
+
+        ret = _get_node(ref)
         if ret is None:
             return default
         elif strict and not type(ret) == cls:
@@ -331,29 +283,36 @@ class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
         elif not strict and not isinstance(ret, cls):
             return default
         else:
-            return cast(ASTNodeType, ret)
+            return cast(_ASTNodeType, ret)
 
     @classmethod
-    def get_any(cls, id: str, default: ASTNode | None = None) -> ASTNode | None:
-        """Gets a node of any type from the AST registry by id.
+    def get_any(cls, ref: str | None, default: ASTNode | None = None) -> ASTNode | None:
+        """Gets a node of any type from the AST registry by ref id.
+
+        Only nodes that were previously added to the registry via `ASTNode.get_ref` method can be retrieved.
 
         Args:
-            id (str): The id of the node to get
+            ref (str | None): The ref value of the node to get. None is for convenience, since nodes may not have a ref value.
             default (ASTNode | None, optional): The default value to return if the node is not found.
                 Defaults to None.
 
         Returns:
             ASTNode | None: The node if found, otherwise the default value
         """
-        return NODE_REGISTRY.get(id, default)
+        if ref is None:
+            return default
+
+        return _get_node(ref, default)
 
     def detach(self) -> None:
         """Removes this node and and the whole tree rooted with this node from
         the registry."""
-        NODE_REGISTRY.pop(self.id, None)
+        if _pop_node(self) is not None:
+            object.__delattr__(self, _REF_ATTR)
 
         for ni in self.dfs():
-            NODE_REGISTRY.pop(ni.node.id, None)
+            if _pop_node(ni.node) is not None:
+                object.__delattr__(ni.node, _REF_ATTR)
 
     def detach_self(self) -> bool:
         """Removes this node from the registry.
@@ -361,19 +320,20 @@ class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
         Returns:
             bool: True if the node was removed, False if it was not in the registry
         """
-        return NODE_REGISTRY.pop(self.id, None) is not None
+        if _pop_node(self) is not None:
+            object.__delattr__(self, _REF_ATTR)
+            return True
 
-    def replace(self: ASTNodeType, **kwargs: Any) -> ASTNodeType:
-        """Replaces this node in the registry with a new one with the given
-        fields replaced.
+        return False
 
-        The key differences vs. using `dataclasses.replace`:
-            - This method will remove the original node from the registry,
+    def replace(self: _ASTNodeType, **kwargs: Any) -> _ASTNodeType:
+        """Creates a new node by replacing values from `kwargs` and replacing
+        this node in the registry with a new one if it was previously
+        registered via `ASTNode.get_ref`.
+
+        The difference vs. `dataclasses.replace`:
+            - This method will remove the original node from the registry, if it was there
                 but only if replace succeeds.
-            - If the new node ID collides with the original node ID,
-                the new node will preserve it, because the original
-                node is purged from the registry before the new one
-                is added.
 
         Args:
             **kwargs (Any): The fields to replace (see dataclasses.replace
@@ -381,39 +341,55 @@ class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
 
         Raises:
             ValueError: see dataclasses.replace
+            ASTRefCollisionError: Unlikely, but may be raised if ref value collision occurs
 
         Returns:
             ASTNodeType: The new node
         """
-        ori_n = NODE_REGISTRY.pop(self.id, None)
+        new_node = replace(self, **kwargs)
 
-        try:
-            new_node = replace(self, **kwargs)
-        except Exception as e:
-            if ori_n is not None:
-                NODE_REGISTRY[ori_n.id] = ori_n
+        if self.ref is not None:
+            # Remember the original ref value
+            ref = self.ref
 
-            raise e
+            # Detach the original node
+            self.detach_self()
+
+            # Register the new node with the same ref value
+            _attach(new_node, ref)
 
         return new_node
 
-    def duplicate(self: ASTNodeType) -> ASTNodeType:
-        """Creates a full duplicate of the given node, recursively duplicating
-        all children."""
-        if config.TRACE_LOGGING:
-            logger.debug(f"Duplicating an existing AST Node <{self.id}>")
+    def replace_with(self, other: _ASTNodeType) -> _ASTNodeType:
+        """Replaces this node with another one by creating an attached copy of
+        the `other` node with the same ref as this node and replacing it in the
+        registry.
 
-        changes: dict[str, Any] = {}
-        for obj, f in self.iter_child_fields():
-            if isinstance(obj, ASTNode):
-                changes[f.name] = obj.duplicate()
-            elif isinstance(obj, tuple):
-                changes[f.name] = tuple(c.duplicate() for c in obj)
+        If this node is not in the registry, returns the other node without
+        modification.
 
-        return replace(
-            self,
-            **changes,
-        )
+        Args:
+            other (ASTNode): The node to replace this one with.
+
+        Raises:
+            ASTRefCollisionError: Unlikely, but may be raised if ref value collision occurs
+        """
+        if self.ref is None:
+            return other
+
+        # make a fresh copy of the other node
+        other = replace(other)
+
+        # Remember the original ref value
+        ref = self.ref
+
+        # Detach the original node
+        self.detach_self()
+
+        # Register the new node with the same ref value
+        _attach(other, ref)
+
+        return other
 
     @property
     def children(self) -> Sequence[ASTNode]:
@@ -422,53 +398,6 @@ class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
         Use `get_child_nodes` to iterate over
         """
         return list(self.get_child_nodes())
-
-    def accept(self, visitor: ASTVisitor[_VRT]) -> _VRT:
-        """Accepts a visitor by finding and calling a matching visitor method
-        that should have a name in a form of visit_{__class__.__name__} or
-        generic_visit if it doesn't exist.
-
-        If the passed in visitor is a strict type, then visit method is matched by
-        the exact type match. Otherise accept method walks the mro until it finds
-        a visit method matching visit_{__class__.__name__}, which means it matches
-        a visitor for the closest super class  of the class of this node.
-
-        Args:
-            visitor (ASTVisitor[VisitorReturnType]): The visitor to accept
-
-        Returns:
-            VisitorReturnType: The return value of the visitor's visit method
-
-        Example:
-            >>> class MyNode(ASTNode):
-            ...     pass
-            >>> class MyChildNode(MyNode):
-            ...     pass
-            >>> class MyVisitor(ASTVisitor):
-            ...     def visit_MyNode(self, node: MyNode) -> str:
-            ...         return "Hello World"
-            ...     def generic_visit(self, node: ASTNode) -> str:
-            ...         return "Hello World"
-            >>> node = MyChildNode()
-            >>> visitor = MyVisitor()
-            >>> visitor.visit(node)
-            "Hello World"
-        """
-        visitor_method = None
-
-        if visitor.strict:
-            visitor_method = getattr(visitor, f"visit_{self.__class__.__name__}", None)
-        else:
-            mro = getmro(self.__class__)
-            for _class in mro[:-1]:
-                visitor_method = getattr(visitor, f"visit_{_class.__name__}", None)
-                if visitor_method is not None:
-                    break
-
-        if visitor_method is None:
-            visitor_method = visitor.generic_visit
-
-        return visitor_method(self)
 
     def is_equal(self, other: Any) -> bool:
         """Returns True if this node is equal to `other`.
@@ -615,12 +544,12 @@ class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
 
     def gather(
         self,
-        obj_class: type[ASTNodeType] | tuple[type[ASTNodeType], ...],
+        obj_class: type[_ASTNodeType] | tuple[type[_ASTNodeType], ...],
         *,
         exact_type: bool = False,
         extra_filter: Callable[[NodeTraversalInfo], bool] | None = None,
         prune: Callable[[NodeTraversalInfo], bool] | None = None,
-    ) -> Generator[ASTNodeType, None, None]:
+    ) -> Generator[_ASTNodeType, None, None]:
         """Shorthand for traversing the tree and gathering all instances of
         subclasses of `obj_class` or exactly `obj_class` if `exact_type` is
         True.
@@ -637,7 +566,7 @@ class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
         Yields:
             Generator[ASTNodeType, None, None]: An iterator of `obj_class` instances.
         """
-        obj_classes: tuple[type[ASTNodeType], ...]
+        obj_classes: tuple[type[_ASTNodeType], ...]
         if not isinstance(obj_class, tuple):
             obj_classes = (obj_class,)
         else:
@@ -658,7 +587,7 @@ class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
                 )
 
         for n_info in self.dfs(prune=prune, filter=filter_fn, bottom_up=False):
-            yield cast(ASTNodeType, n_info.node)
+            yield cast(_ASTNodeType, n_info.node)
 
     def find(self, xpath: str | ASTXpath) -> ASTNode | None:
         """Finds a node by xpath.
@@ -857,13 +786,13 @@ class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
 
         return tree
 
-    __hash__ = _hash_fn
+    __hash__ = hash_fn
 
     def __init_subclass__(cls) -> None:
         # Make sure subclasses use the same hash, eq functions
         # instead of the standard slow dataclass approach
-        cls.__hash__ = _hash_fn  # type: ignore[assignment]
-        cls.__eq__ = _eq_fn  # type: ignore[assignment]
+        cls.__hash__ = hash_fn  # type: ignore[assignment]
+        cls.__eq__ = eq_fn  # type: ignore[assignment]
 
         # Make sure subclass will use the functions that generate specialized
         # methods on the fly for each class
@@ -884,6 +813,3 @@ class ASTNode(DataClassSerializeMixin, _WeakRefSlot):
             )
 
         return super(ASTNode, cls).__init_subclass__()
-
-
-ASTNodeType = TypeVar("ASTNodeType", bound=ASTNode)

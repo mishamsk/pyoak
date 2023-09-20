@@ -19,6 +19,15 @@ class ASTNodeError(Exception):
         return f"{self.__class__.__name__}({self.message})"
 
 
+class ASTRefCollisionError(ASTNodeError):
+    """Raised when a ref value collision is detected."""
+
+    def __init__(self, ref: str) -> None:
+        self.ref = ref
+        message = f"Ref value collision for {ref}"
+        super().__init__(message, ref)
+
+
 class InvalidFieldAnnotations(ASTNodeError):
     """Raised when an ASTNode has fields with mixed ASTNode subclasses and
     regular types or unsupported child fileds types (e.g. mutable collections

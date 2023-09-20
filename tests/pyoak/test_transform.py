@@ -4,7 +4,8 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 import pytest
-from pyoak.node import NODE_REGISTRY, ASTNode
+from pyoak.node import ASTNode
+from pyoak.registry import _REF_TO_NODE
 from pyoak.visitor import ASTTransformVisitor
 
 
@@ -31,20 +32,29 @@ def test_no_op_transform_visitor() -> None:
     class TRVisitor(ASTTransformVisitor):
         ...
 
-    tree = TRParentNode("parent", TRChildNode("keep", "1"), (TRChildNode("keep", "2"),))
+    achild = TRChildNode("keep", "1", attached=True)
+    tree = TRParentNode("parent", achild, (TRChildNode("keep", "2"),))
 
     assert TRVisitor().transform(tree) is tree
+    assert tree.child is achild
+    assert ASTNode.get_any(achild.ref) is achild
 
 
 def test_partial_change_transform_visitor() -> None:
     class TRVisitor(ASTTransformVisitor):
         def visit_TRChildNode(self, node: TRChildNode) -> TRChildNode:
             if node.attr == "1":
-                return replace(node, attr="changed " + node.attr)
+                return node.replace(attr="changed " + node.attr)
 
             return node
 
-    tree = TRParentNode("parent", TRChildNode("keep", "1"), (TRChildNode("keep", "2"),))
+    # Ensure ref's are preserved
+    achild1 = TRChildNode("keep", "1", attached=True)
+    achild1_ref = achild1.ref
+    achild2 = TRChildNode("keep", "2", attached=True)
+    achild2_ref = achild2.ref
+    tree = TRParentNode("parent", achild1, (achild2,), attached=True)
+    tree_ref = tree.ref
 
     new_tree = TRVisitor().transform(tree)
 
@@ -53,6 +63,9 @@ def test_partial_change_transform_visitor() -> None:
     assert new_tree.child is not tree.child
     assert new_tree.child is not None and new_tree.child.attr == "changed 1"
     assert new_tree.child_nodes[0] is tree.child_nodes[0]
+    assert ASTNode.get_any(achild1_ref) is new_tree.child
+    assert ASTNode.get_any(achild2_ref) is achild2
+    assert ASTNode.get_any(tree_ref) is new_tree
 
 
 def test_transform_visitor() -> None:
@@ -182,11 +195,11 @@ def test_transform_visitor_error_recovery() -> None:
 
             return replace(node, **changes)
 
-    child_keep1 = TRChildNode("keep", "child_keep1")
+    child_keep1 = TRChildNode("keep", "child_keep1", attached=True)
     child_keep2 = TRChildNode("keep", "child_keep2")
     child_remove1 = TRChildNode("remove", "child_remove1")
     child_remove2 = TRChildNode("remove", "child_remove2")
-    child_transform1 = TRChildNode("transform", "child_transform1")
+    child_transform1 = TRChildNode("transform", "child_transform1", attached=True)
     child_transform2 = TRChildNode("transform", "child_transform2")
 
     parent1 = TRParentNode(
@@ -208,6 +221,7 @@ def test_transform_visitor_error_recovery() -> None:
         _ = TRVisitor().transform(orig_root)
 
     # Make sure the original tree is not modified
-    # Clear registry to ensure the same id's are used
-    NODE_REGISTRY.clear()
+    # Normally it is not possible to deserialize with the same refs
+    # But for test purposes clear registry to ensure the same id's are used
+    _REF_TO_NODE.clear()
     assert orig_root == TRRootNode.as_obj(serialized)

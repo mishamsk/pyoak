@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
-from dataclasses import replace
-from inspect import getmembers, isfunction
+from inspect import getmembers, getmro, isfunction
 from operator import itemgetter
 from typing import Any, Generic, Mapping, TypeVar
 
@@ -27,8 +26,51 @@ class ASTVisitor(Generic[_VRT], ABC):
         raise NotImplementedError
 
     def visit(self, node: ASTNode) -> _VRT:
-        """Visits the given node and returns the result."""
-        return node.accept(self)
+        """Visits the given node by finding and calling a matching visitor
+        method that should have a name in a form of visit_{__class__.__name__}
+        or generic_visit if it doesn't exist.
+
+        If the visitor `strict` class var is True, then visit method is matched by
+        the exact type match. Otherise this method walks the mro until it finds
+        a visit method matching visit_{__class__.__name__}, which means it matches
+        a visitor for the closest super class  of the class of this node.
+
+        Args:
+            node (ASTNode): The node to visit.
+
+        Returns:
+            VisitorReturnType: The return value of the visitor's visit method
+
+        Example:
+            >>> class MyNode(ASTNode):
+            ...     pass
+            >>> class MyChildNode(MyNode):
+            ...     pass
+            >>> class MyVisitor(ASTVisitor):
+            ...     def visit_MyNode(self, node: MyNode) -> str:
+            ...         return "Hello World"
+            ...     def generic_visit(self, node: ASTNode) -> str:
+            ...         return "Hello World"
+            >>> node = MyChildNode()
+            >>> visitor = MyVisitor()
+            >>> visitor.visit(node)
+            "Hello World"
+        """
+        visitor_method = None
+
+        if self.strict:
+            visitor_method = getattr(self, f"visit_{node.__class__.__name__}", None)
+        else:
+            mro = getmro(node.__class__)
+            for _class in mro[:-1]:
+                visitor_method = getattr(self, f"visit_{_class.__name__}", None)
+                if visitor_method is not None:
+                    break
+
+        if visitor_method is None:
+            visitor_method = self.generic_visit
+
+        return visitor_method(node)
 
     def __init_subclass__(cls, *, validate: bool = False) -> None:
         """Iterate over new visitor methods and check that names match the node
@@ -140,7 +182,7 @@ class ASTTransformVisitor(ASTVisitor[ASTNode | None]):
             return node
 
         # Return a new node with the changes
-        return replace(node, **changes)
+        return node.replace(**changes)
 
     transform = ASTVisitor[ASTNode | None].visit
     """Am alias for visit method."""

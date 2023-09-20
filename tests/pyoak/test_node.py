@@ -1,25 +1,26 @@
 from __future__ import annotations
 
 import gc
-from dataclasses import InitVar, dataclass, field
+from dataclasses import InitVar, dataclass, field, replace
 from typing import Any, ClassVar, Generator, Iterable, cast
 
 import pytest
 from deepdiff import DeepDiff
+from mashumaro.exceptions import InvalidFieldValue
 from mashumaro.types import SerializableType
 from pyoak import config
-from pyoak.error import InvalidTypes
+from pyoak.error import ASTRefCollisionError, InvalidTypes
 from pyoak.match.error import ASTXpathDefinitionError
 from pyoak.match.xpath import ASTXpath
 from pyoak.node import (
     AST_SERIALIZE_DIALECT_KEY,
-    NODE_REGISTRY,
     ASTNode,
     ASTSerializationDialects,
     NodeTraversalInfo,
 )
 from pyoak.origin import NO_ORIGIN, CodeOrigin, MemoryTextSource, get_code_range
-from pyoak.serialize import TYPE_KEY, DataClassSerializeMixin
+from pyoak.registry import _REF_TO_NODE
+from pyoak.serialize import TYPE_KEY, DataClassSerializeMixin, unwrap_invalid_field_exception
 from pyoak.typing import Field
 
 from tests.pyoak.conftest import ConfigFixtureProtocol
@@ -27,7 +28,7 @@ from tests.pyoak.conftest import ConfigFixtureProtocol
 # get_child_nodes_with_field code is compiled on the fly on the first call
 # since it is used in __post_init__ of ASTNode, it happens on the first
 # instantiation of any ASTNode subclass
-# make sure that codegen for the ASTNode class itself doesn't break the subclasses
+# this indirectly tests that codegen for the ASTNode class itself doesn't break the subclasses
 _ = ASTNode()
 
 
@@ -88,8 +89,8 @@ class RuntimeTypeCheckNode(ASTNode):
     child_seq: tuple[ASTNode, ...]
     initvar: InitVar[int]
 
-    def __post_init__(self, initvar: int) -> None:
-        return super().__post_init__()
+    def __post_init__(self, initvar: int, attached: bool) -> None:
+        return super().__post_init__(attached)
 
 
 origin = CodeOrigin(MemoryTextSource("test"), get_code_range(0, 1, 0, 3, 1, 3))
@@ -121,43 +122,35 @@ def test_id_handling(pyoak_config: ConfigFixtureProtocol) -> None:
     node = ChildNode("test", origin=origin)
     assert node.id is not None
     assert len(node.id) == config.ID_DIGEST_SIZE * 2
-    assert node == ChildNode.get(node.id)
-    assert ASTNode.get(node.id) is None
-    assert node == ASTNode.get_any(node.id)
 
-    # Same content, different id
+    # Same content, same id
     new_node = ChildNode("test", origin=origin)
     assert node == new_node
     assert node.is_equal(new_node)
     assert node is not new_node
-    assert node.id != new_node.id
+    assert node.id == new_node.id
+    assert hash(node) == hash(new_node)
 
     # Test changing digest size
     with pyoak_config(id_digest_size=config.ID_DIGEST_SIZE * 2):
         node = ChildNode("test2", origin=origin)
         assert node.id is not None
         assert len(node.id) == config.ID_DIGEST_SIZE * 2
-        assert node == ChildNode.get(node.id)
-        assert ASTNode.get(node.id) is None
-        assert node == ASTNode.get_any(node.id)
 
-    # Test handling of id collisions with nodes of same & different content
+    # Test handling of id collisions with different content
     # we are using a super small digest to guarantee collisions
     with pyoak_config(id_digest_size=1):
         node = ChildNode("test")
-        # same content
-        new_node = ChildNode("test")
         # different content that will collide
-        other_node = ChildNode("L3C2089KVA")
+        collided_node = ChildNode("L3C2089KVA")
 
-        assert len({node.id, new_node.id, other_node.id}) == 3
-
-        for n in (node, new_node, other_node):
-            assert n is ASTNode.get_any(n.id)
-
-        # the collision resolution is via a counter
-        assert new_node.id == f"{node.id}_1"
-        assert other_node.id == f"{node.id}_2"
+        assert node.id == collided_node.id
+        assert node is not collided_node
+        # But since we are using both id & content_id for equality
+        # the latter must be not equal
+        assert node.content_id != collided_node.content_id
+        assert node != collided_node
+        assert not node.is_equal(collided_node)
 
     # Test that changing the field order in class definition doesn't change the id
     @dataclass(frozen=True)
@@ -168,9 +161,6 @@ def test_id_handling(pyoak_config: ConfigFixtureProtocol) -> None:
         ch2: ChildNode
 
     onode = IdOrderTest(attr1="1", attr2="2", ch1=ChildNode("3"), ch2=ChildNode("4"))
-    nid = onode.id
-    ncontent_id = onode.content_id
-    onode.detach_self()
 
     # Redefine the class with different field order
     @dataclass(frozen=True)
@@ -180,9 +170,105 @@ def test_id_handling(pyoak_config: ConfigFixtureProtocol) -> None:
         ch1: ChildNode
         attr1: str
 
-    onode = IdOrderTest(attr1="1", attr2="2", ch1=ChildNode("3"), ch2=ChildNode("4"))
-    assert onode.id == nid
-    assert onode.content_id == ncontent_id
+    sonode = IdOrderTest(attr1="1", attr2="2", ch1=ChildNode("3"), ch2=ChildNode("4"))
+    assert onode.id == sonode.id
+    assert onode.content_id == sonode.content_id
+
+
+def test_content_id() -> None:
+    ch_nodes: list[ASTNode] = []
+    ch_count = 2
+    for i in range(ch_count):
+        ch_nodes.append(ChildNode(str(i), origin=origin))
+
+    different_origin = CodeOrigin(MemoryTextSource("different"), get_code_range(0, 1, 0, 3, 1, 3))
+    # Last child is the same but with different origin
+    ch_nodes.append(ChildNode("1", origin=different_origin))
+
+    parent = ParentNode(
+        attr="Test",
+        single_child=ch_nodes[0],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple(str(i) for i in range(10)),
+        origin=origin,
+    )
+    duplicate = replace(parent)
+
+    assert ch_nodes[1] != ch_nodes[2]
+    assert ch_nodes[1] is not ch_nodes[2]
+    assert ch_nodes[1].id != ch_nodes[2].id
+    assert ch_nodes[1].content_id == ch_nodes[2].content_id
+
+    assert parent == duplicate
+    assert parent is not duplicate
+    assert parent.content_id == duplicate.content_id
+
+    # Test content id invariant to non-comparable fields
+    one = NonCompareAttrNode(attr="1", non_compare_attr="one", origin=origin)
+    two = NonCompareAttrNode(attr="1", non_compare_attr="two", origin=origin)
+
+    assert one.content_id == two.content_id
+
+
+def test_ref_handling(pyoak_config: ConfigFixtureProtocol) -> None:
+    # By default ref is not craeted
+    node = ChildNode("test", origin=origin)
+    assert node.ref is None
+    assert node not in _REF_TO_NODE.values()
+
+    # Create via init var
+    rnode = ChildNode("test", origin=origin, attached=True)
+
+    # content & id must match, but not hash, and should not be equal
+    assert rnode.ref is not None
+    assert rnode == ChildNode.get(rnode.ref)
+    assert rnode.ref in _REF_TO_NODE
+    assert _REF_TO_NODE[rnode.ref] is rnode
+    assert rnode != node
+    assert hash(rnode) != hash(node)
+    assert rnode.id == node.id
+    assert rnode.content_id == node.content_id
+
+    # Create via to_attached
+    rnode2 = node.to_attached()
+
+    assert rnode2.ref is not None
+    assert rnode2 == ChildNode.get(rnode2.ref)
+    assert rnode2.ref in _REF_TO_NODE
+    assert _REF_TO_NODE[rnode2.ref] is rnode2
+    assert rnode2 != node
+    assert hash(rnode2) != hash(node)
+    assert rnode2.id == node.id
+    assert rnode2.content_id == node.content_id
+
+    # also rnode2 should not be equal to rnode
+    assert rnode2 is not rnode
+    assert rnode2 != rnode
+    assert hash(rnode2) != hash(rnode)
+    assert rnode2.ref != rnode.ref
+
+    # Test that subsequent calls produce unique nodes with ref
+    rnode3 = node.to_attached()
+    assert rnode3.ref is not None
+    assert rnode3 == ChildNode.get(rnode3.ref)
+    assert rnode3 is not rnode2
+    assert rnode3 != rnode2
+    assert rnode3.ref != rnode2.ref
+    assert rnode3.ref != rnode.ref
+    assert hash(rnode3) != hash(rnode2)
+    assert rnode3.id == node.id
+    assert rnode3.content_id == node.content_id
+
+
+def test_ref_or_raise() -> None:
+    node = ChildNode("test", origin=origin)
+
+    with pytest.raises(AttributeError):
+        node.ref_or_raise
+
+    rnode = node.to_attached()
+
+    assert rnode.ref_or_raise is not None
 
 
 def test_runtime_type_checks(pyoak_config: ConfigFixtureProtocol) -> None:
@@ -227,48 +313,22 @@ def test_runtime_type_checks(pyoak_config: ConfigFixtureProtocol) -> None:
         assert _get_fname_set(excinfo.value.invalid_fields) == {"ninit"}
 
 
-def test_content_id() -> None:
-    ch_nodes: list[ASTNode] = []
-    ch_count = 2
-    for i in range(ch_count):
-        ch_nodes.append(ChildNode(str(i), origin=origin))
-
-    different_origin = CodeOrigin(MemoryTextSource("different"), get_code_range(0, 1, 0, 3, 1, 3))
-    # Last child is the same but with different origin
-    ch_nodes.append(ChildNode("1", origin=different_origin))
-
-    parent = ParentNode(
-        attr="Test",
-        single_child=ch_nodes[0],
-        child_seq=tuple(ch_nodes[1:]),
-        not_a_child_seq=tuple(str(i) for i in range(10)),
-        origin=origin,
-    )
-    duplicate = parent.duplicate()
-
-    assert ch_nodes[1] != ch_nodes[2]
-    assert ch_nodes[1] is not ch_nodes[2]
-    assert ch_nodes[1].id != ch_nodes[2].id
-    assert ch_nodes[1].content_id == ch_nodes[2].content_id
-
-    assert parent == duplicate
-    assert parent is not duplicate
-    assert parent.id != duplicate.id
-    assert parent.content_id == duplicate.content_id
-
-    # Test content id invariant to hidden and non-comparable fields
-    one = NonCompareAttrNode(attr="1", non_compare_attr="one", origin=origin)
-    one_dup = one.duplicate()
-    two = NonCompareAttrNode(attr="1", non_compare_attr="two", origin=origin)
-    two_dup = two.duplicate()
-
-    assert one == two
-    assert one.content_id == two.content_id == one_dup.content_id == two_dup.content_id
-
-
 def test_serialization() -> None:
     child = ChildNode("1")
 
+    # Basic test
+    assert (
+        child.to_json()
+        == f'{{"{TYPE_KEY}":"ChildNode","id":"{child.id}","content_id":"{child.content_id}","origin":{{}},"attr":"1"}}'
+    )
+
+    rchild = child.to_attached()
+    assert (
+        rchild.to_json()
+        == f'{{"{TYPE_KEY}":"ChildNode","id":"{rchild.id}","content_id":"{rchild.content_id}","origin":{{}},"attr":"1","__node_ref__":"{rchild.ref}"}}'
+    )
+
+    # Test roundtrip for a tree. Without attached nodes
     mid_node = ParentNode(
         attr="Mid",
         single_child=child,
@@ -291,21 +351,55 @@ def test_serialization() -> None:
     # Class should be present on the root node
     assert TYPE_KEY in serialized_dict
 
-    # Should be the same object
-    assert parent is deserialized
+    # Should be equal but not the same object
+    assert parent is not deserialized
+    assert parent == deserialized
 
-    # Now clear the registry and try to deserialize
-    NODE_REGISTRY.clear()
+    # Internally, the child nodes should not be the same object (we loose the fact they were the same)
+    assert isinstance(deserialized.single_child, ParentNode)
+    assert deserialized.single_child.single_child is not deserialized.child_seq[0]
+    assert deserialized.single_child.single_child == deserialized.child_seq[0]
+
+    # Now the same, but with some nodes attached
+    parent = ParentNode(
+        attr="Test",
+        single_child=mid_node,
+        # use the same child node twice
+        child_seq=(rchild,),
+        not_a_child_seq=(),
+        origin=origin,
+        attached=True,
+    )
+
+    serialized_dict = parent.as_dict()
+
+    # The dict should contain the ref for parent and the rchild
+    assert "__node_ref__" in serialized_dict
+    assert serialized_dict["__node_ref__"] == parent.ref
+    assert serialized_dict["child_seq"][0]["__node_ref__"] == rchild.ref
+
+    # It should not be possible to deserialize, due to ref collision
+    with pytest.raises(InvalidFieldValue) as mashumaro_err:
+        ParentNode.as_obj(serialized_dict)
+
+    col_err = unwrap_invalid_field_exception(mashumaro_err.value)[1]
+    assert isinstance(col_err, ASTRefCollisionError)
+    assert col_err.ref == rchild.ref
+
+    # Now detach the tree and try again. But remember original refs
+    p_ref = parent.ref
+    rchild_ref = rchild.ref
+
+    parent.detach()
 
     deserialized = ParentNode.as_obj(serialized_dict)
-
-    # Should be a new object
-    assert parent is not deserialized
-    # but equal
-    assert parent == deserialized
-    # Internally, the child nodes should be the same object
-    assert isinstance(deserialized.single_child, ParentNode)
-    assert deserialized.single_child.single_child is deserialized.child_seq[0]
+    assert deserialized is not parent
+    assert deserialized != parent  # because of the ref
+    assert deserialized.id == parent.id
+    assert deserialized.ref == p_ref
+    assert deserialized.child_seq[0].ref == rchild_ref
+    assert ParentNode.get(p_ref) is deserialized
+    assert ChildNode.get(rchild_ref) is deserialized.child_seq[0]
 
 
 def test_no_origin_serialization() -> None:
@@ -413,103 +507,132 @@ def test_to_msgpack() -> None:
     serialized = parent.to_msgpck()
     deserialized = ParentNode.from_msgpck(serialized)
 
-    assert parent is deserialized
+    assert parent is not deserialized
+    assert parent == deserialized
 
 
 def test_get() -> None:
-    n = SubChildNode("test")
-    o = ChildNode("test")
+    # Test properly attached
+    n = SubChildNode("test", attached=True)
+    o = ChildNode("test", attached=True)
 
-    assert SubChildNode.get(n.id) is n
-    assert ChildNode.get(n.id) is None
-    assert ChildNode.get(n.id, o) is o
+    assert n.ref is not None
+    assert SubChildNode.get(n.ref) is n
+    assert ChildNode.get(n.ref) is None
+    assert ChildNode.get(n.ref, o) is o
     assert ChildNode.get("bogus", o) is o
-    assert ChildNode.get(n.id, strict=False) is n
+    assert ChildNode.get(n.ref, strict=False) is n
     assert ChildNode.get("bogus", strict=False) is None
-    assert ChildNode.get(n.id, o, strict=False) is n
+    assert ChildNode.get(n.ref, o, strict=False) is n
     assert ChildNode.get("bogus", o, strict=False) is o
+
+    # Test unattached never available via get
+    n = SubChildNode("test")
+    assert n.ref is None
+    assert SubChildNode.get(n.id) is None
+    assert SubChildNode.get(n.id, strict=False) is None
 
 
 def test_get_any() -> None:
-    n = SubChildNode("test")
+    # Test properly attached
+    n = SubChildNode("test", attached=True)
 
-    n_id = n.id
-    assert ASTNode.get_any(n_id) is n
+    assert n.ref is not None
+    n_ref = n.ref
+    assert ASTNode.get_any(n_ref) is n
     assert ASTNode.get_any("bogus") is None
     assert ASTNode.get_any("bogus", n) is n
 
     # Test that after deletion, registry is cleared
     del n
     gc.collect()
-    assert ASTNode.get_any(n_id) is None
+    assert ASTNode.get_any(n_ref) is None
 
 
 def test_detach() -> None:
     # Create a node and register it
-    node = ChildNode("node1")
-    assert ChildNode.get(node.id) is node
+    node = ChildNode("node1", attached=True)
+
+    n_ref = node.ref
+    assert n_ref is not None
+    assert ChildNode.get(n_ref) is node
 
     # Test detach
     node.detach()
-    assert ChildNode.get(node.id) is None
+    assert node.ref is None
+    assert ChildNode.get(n_ref) is None
 
     # Test detaching a tree
-    node = ChildNode("node1")
-    och = ChildNode("och")
+    node = ChildNode("node1", attached=True)
+    och = ChildNode("och", attached=True)
 
     parent = ParentNode(
         attr="Test",
         single_child=node,
         child_seq=(och,),
         not_a_child_seq=(),
+        attached=True,
     )
 
-    assert all(ASTNode.get_any(n.id) is n for n in (node, och, parent))
+    all_refs = [node.ref, och.ref, parent.ref]
+    assert all(r is not None for r in all_refs)
+    assert all(ASTNode.get_any(n.ref) is n for n in (node, och, parent))
 
     parent.detach()
-    assert all(ASTNode.get_any(n.id) is None for n in (node, och, parent))
+    assert all(ASTNode.get_any(ref) is None for ref in all_refs)
 
 
 def test_detach_self() -> None:
     # Create a node and register it
-    node = ChildNode("node1")
-    assert ChildNode.get(node.id) is node
+    node = ChildNode("node1", attached=True)
+    assert ChildNode.get(node.ref) is node
 
+    n_ref = node.ref
     # Test successful detach
     assert node.detach_self() is True
-    assert ChildNode.get(node.id) is None
+    assert node.ref is None
+    assert ChildNode.get(n_ref) is None
 
     # Test unsuccessful detach
     assert node.detach_self() is False
-    assert ChildNode.get(node.id) is None
+    assert node.ref is None
+    assert ChildNode.get(n_ref) is None
 
     # Test detaching parent while retaining children
-    node = ChildNode("node1")
-    och = ChildNode("och")
+    node = ChildNode("node1", attached=True)
+    och = ChildNode("och", attached=True)
 
     parent = ParentNode(
         attr="Test",
         single_child=node,
         child_seq=(och,),
         not_a_child_seq=(),
+        attached=True,
     )
 
-    assert all(ASTNode.get_any(n.id) is n for n in (node, och, parent))
+    assert all(ASTNode.get_any(n.ref) is n for n in (node, och, parent))
 
+    p_ref = parent.ref
     assert parent.detach_self() is True
-    assert all(ASTNode.get_any(n.id) is n for n in (node, och))
-    assert ASTNode.get_any(parent.id) is None
+    assert all(ASTNode.get_any(n.ref) is n for n in (node, och))
+    assert ASTNode.get_any(p_ref) is None
 
     assert parent.detach_self() is False
-    assert all(ASTNode.get_any(n.id) is n for n in (node, och))
-    assert ASTNode.get_any(parent.id) is None
+    assert all(ASTNode.get_any(n.ref) is n for n in (node, och))
+    assert ASTNode.get_any(p_ref) is None
+
+    # Detach changes the node in-place, so detaching a node should bring it
+    # back to the unattached state
+    node = ChildNode("node1")
+    anode = node.to_attached()
+    assert anode != node
+    assert anode.detach_self()
+    assert anode == node
 
 
 def test_replace() -> None:
-    # Create a node and register it
-    # Use model with non compare attr to test for id collisions
+    # Create a a non-attached node
     node = NonCompareAttrNode("node1", non_compare_attr="one")
-    assert NonCompareAttrNode.get(node.id) is node
 
     # Test successful replace
     new_node = node.replace(attr="node2")
@@ -518,57 +641,112 @@ def test_replace() -> None:
     assert new_node.attr == "node2"
     assert new_node.non_compare_attr == "one"
     assert new_node.non_init_attr == "test"
-    assert NonCompareAttrNode.get(node.id) is None
-    assert NonCompareAttrNode.get(new_node.id) is new_node
+    assert new_node.ref is None
+
+    # Test the same with dataclass replace
+    new_node = replace(node, attr="node2")
+    assert new_node is not node
+    assert new_node.id != node.id
+    assert new_node.attr == "node2"
+    assert new_node.non_compare_attr == "one"
+    assert new_node.non_init_attr == "test"
+    assert new_node.ref is None
+
+    # Now test with attached node
+    anode = node.to_attached()
+
+    # First dataclass replace. This should not preserve the ref
+    new_anode = replace(anode, attr="node2")
+    assert new_anode is not anode
+    assert new_anode.id != anode.id
+    assert new_anode.attr == "node2"
+    assert new_anode.non_compare_attr == "one"
+    assert new_anode.non_init_attr == "test"
+    assert new_anode.ref is None
+
+    # Now test with replace method. This should preserve the ref
+    # And should remove the ref from the old node
+    o_ref = anode.ref
+    new_anode = anode.replace(attr="node2")
+    assert new_anode is not anode
+    assert new_anode.id != anode.id
+    assert new_anode.attr == "node2"
+    assert new_anode.non_compare_attr == "one"
+    assert new_anode.non_init_attr == "test"
+    assert new_anode.ref == o_ref
+    assert NonCompareAttrNode.get(o_ref) is new_anode
+    assert anode.ref is None
 
     # Test replace with content that produces the same id
     node = new_node
     new_node = node.replace(non_compare_attr="two")
     assert new_node is not node
+    assert new_node == node
+    assert hash(new_node) == hash(node)
     assert new_node.id == node.id
     assert new_node.is_equal(node)
     assert new_node.non_compare_attr == "two"
     assert new_node.non_init_attr == "test"
-    assert NonCompareAttrNode.get(new_node.id) is new_node
 
-    # Test unsuccessful replace with exception
-    with pytest.raises(ValueError):
-        new_node.replace(non_compare_attr="three", non_init_attr="three")
-
-    # validate that the node is not replaced
-    assert NonCompareAttrNode.get(new_node.id) is new_node
-
-    # Test replacing node already not in the registry (detached)
+    # Same with dataclass replace
     node = new_node
-    node.detach_self()
-    assert NonCompareAttrNode.get(node.id) is None
-    new_node = node.replace(attr="node3")
+    new_node = replace(node, non_compare_attr="two")
     assert new_node is not node
-    assert new_node.id != node.id
-    assert new_node.attr == "node3"
+    assert new_node == node
+    assert hash(new_node) == hash(node)
+    assert new_node.id == node.id
+    assert new_node.is_equal(node)
     assert new_node.non_compare_attr == "two"
     assert new_node.non_init_attr == "test"
-    assert NonCompareAttrNode.get(node.id) is None
-    assert NonCompareAttrNode.get(new_node.id) is new_node
+
+    # Test unsuccessful replace with exception for attached node
+    # Make sure it doesn't detach the original
+    with pytest.raises(ValueError):
+        new_anode.replace(non_compare_attr="three", non_init_attr="three")
+
+    # validate that the node is not replaced
+    assert NonCompareAttrNode.get(new_anode.ref) is new_anode
 
 
-def test_duplicate() -> None:
-    # Test simple replacement
-    ch_nodes: list[ASTNode] = []
-    ch_count = 10
-    for i in range(ch_count):
-        ch_nodes.append(ChildNode(str(i), origin=origin))
+def test_replace_with() -> None:
+    # Create two non-attached nodes
+    node1 = ChildNode("node1")
+    node2 = OtherNode("node2")
 
-    parent = ParentNode(
-        attr="Test",
-        single_child=ch_nodes[0],
-        child_seq=tuple(ch_nodes[1:]),
-        not_a_child_seq=tuple(str(i) for i in range(10)),
-        origin=origin,
-    )
-    dup_parent = parent.duplicate()
-    assert dup_parent is not parent
-    assert dup_parent == parent
+    # Replacing non-attached node yields the original
+    assert node1.replace_with(node2) is node2
+
+    # Now create attached versions
+    anode1 = node1.to_attached()
+    anode2 = node2.to_attached()
+
+    anode1_ref = anode1.ref
+    anode2_ref = anode2.ref
+
+    # First test replacing attached with non-attached
+    rnode1 = anode1.replace_with(node2)
+    assert anode1.ref is None
+    assert node2.ref is None
+    assert rnode1.ref == anode1_ref
+    assert ASTNode.get_any(anode1_ref) is rnode1
+    # They are not equal, but only because of the ref
+    assert rnode1 != node2
+    assert rnode1.is_equal(node2)
+    assert rnode1.id == node2.id
+    assert rnode1.origin == node2.origin
+
+    # Now test replacing attached with attached
+    # This should preserve the ref on the original replaced node
+    rnode2 = rnode1.replace_with(anode2)
+    assert rnode1.ref is None
+    assert anode2.ref == anode2_ref
+    assert rnode2.ref == anode1_ref
+    assert ASTNode.get_any(anode1_ref) is rnode2
+    assert ASTNode.get_any(anode2_ref) is anode2
+    assert rnode2 != anode2
+    assert rnode2.is_equal(anode2)
+    assert rnode2.id == anode2.id
+    assert rnode2.origin == anode2.origin
 
 
 def test_children() -> None:
@@ -591,10 +769,22 @@ def test_children() -> None:
 def test_equality() -> None:
     # Testing the full equality (==) and content-wise equality (is_equal)
 
-    # Test euqal itself
+    # Test equal itself
     one = ChildNode("1", origin=origin)
     assert one.is_equal(one)
     assert one == one
+
+    # Test not equal to an attached version of itself
+    aone = one.to_attached()
+    assert one != aone
+    assert one.is_equal(aone)
+
+    # Test multiple attached versions are all not equal
+    aone2 = one.to_attached()
+    assert aone != aone2
+    assert aone.is_equal(aone2)
+    assert one != aone2
+    assert one.is_equal(aone2)
 
     # Test different types & values
     two = ChildNode("2", origin=origin)
@@ -618,7 +808,7 @@ def test_equality() -> None:
     assert one.is_equal(collided_one)
 
     # Test with duplicate
-    duplicated_one = one.duplicate()
+    duplicated_one = replace(one)
     assert one == duplicated_one
     assert one.is_equal(duplicated_one)
 

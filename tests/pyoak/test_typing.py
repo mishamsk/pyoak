@@ -1,6 +1,9 @@
-from dataclasses import KW_ONLY, InitVar, dataclass
+from collections.abc import Mapping as AbcMapping
+from collections.abc import MutableMapping as AbcMutableMapping
+from dataclasses import KW_ONLY, InitVar, dataclass, fields
 from functools import partial
 from typing import (
+    Annotated,
     ClassVar,
     Dict,
     FrozenSet,
@@ -22,11 +25,13 @@ from pyoak.typing import (
     FieldTypeInfo,
     InvalidTypeReason,
     check_annotations,
+    check_runtime_types,
     get_field_types,
     has_check_type_in_type,
     is_classvar,
     is_collection,
     is_dataclass_kw_only,
+    is_immutable_mapping,
     is_initvar,
     is_instance,
     is_literal,
@@ -112,6 +117,52 @@ def test_is_tuple() -> None:
     assert not is_tuple(int)
     assert not is_tuple(dict)
     assert not is_tuple(list)
+
+
+def test_is_immutable_mapping() -> None:
+    # Test with built-in Mapping types
+    assert is_immutable_mapping(Mapping) is True
+    assert is_immutable_mapping(dict) is False
+    assert is_immutable_mapping(list) is False
+    assert is_immutable_mapping(set) is False
+    assert is_immutable_mapping(tuple) is False
+
+    # Test with custom Mapping types
+    class MyMapping(AbcMapping[str, int]):
+        def __getitem__(self, key: str) -> int:
+            return 42
+
+        def __iter__(self):
+            return iter([])
+
+        def __len__(self):
+            return 0
+
+    class MyMutableMapping(AbcMutableMapping[str, int]):
+        def __getitem__(self, key: str) -> int:
+            return 42
+
+        def __setitem__(self, key: str, value: int) -> None:
+            pass
+
+        def __delitem__(self, key: str) -> None:
+            pass
+
+        def __iter__(self):
+            return iter([])
+
+        def __len__(self):
+            return 0
+
+    assert is_immutable_mapping(MyMapping) is True
+    assert is_immutable_mapping(MyMutableMapping) is False
+
+    # Test with non-Mapping types
+    assert is_immutable_mapping(int) is False
+    assert is_immutable_mapping(str) is False
+    assert is_immutable_mapping(list[int]) is False
+    assert is_immutable_mapping(set[str]) is False
+    assert is_immutable_mapping(tuple[int, str]) is False
 
 
 def test_is_optional() -> None:
@@ -556,3 +607,57 @@ def test_is_instance() -> None:
     assert not is_instance("hello", Union[int, float])
     assert not is_instance(2, Literal[1])
     assert not is_instance("world", Literal["hello"])
+
+
+def test_check_runtime_types() -> None:
+    @dataclass
+    class MyDataclass:
+        x: int
+        y: float
+        z: str
+        lst: Sequence[int]
+        tpl: Tuple[str, int]
+        dct: Mapping[str, float]
+        fst: FrozenSet[Union[int, str]]
+        opt: Optional[str]
+        anno: Annotated[Union[int, str], "my annotation"]
+        children: tuple[MockASTNode, ...]
+
+    # Create a dataclass instance with correct types
+    obj1 = MyDataclass(
+        x=42,
+        y=3.14,
+        z="hello",
+        lst=[1, 2, 3],
+        tpl=("world", 4),
+        dct={"foo": 1.23, "bar": 4.56},
+        fst=frozenset([1, "two"]),
+        opt=None,
+        anno="test",
+        children=(TypTestSubASTNode1(prop="p", child=MockASTNode(), child_list=()),),
+    )
+
+    # Create a dataclass instance with incorrect types
+    obj2 = MyDataclass(
+        x=42,
+        y="3.14",  # type: ignore
+        z=42,  # type: ignore
+        lst=[1, 2, "three"],  # type: ignore
+        tpl=("world", "four"),  # type: ignore
+        dct={"foo": 1.23, "bar": "4.56"},  # type: ignore
+        fst=frozenset([1, "two", 3.0]),  # type: ignore
+        opt=42,  # type: ignore
+        anno=42.0,  # type: ignore
+        children=[TypTestSubASTNode1(prop="p", child=MockASTNode(), child_list=())],  # type: ignore
+    )
+
+    props, chfields = process_node_fields(MyDataclass, MockASTNode)
+    field_type_map = {**props, **chfields}
+
+    # Test check_runtime_types with correct types
+    incorrect_fields = check_runtime_types(obj1, field_type_map)
+    assert incorrect_fields == []
+
+    # Test check_runtime_types with incorrect types
+    incorrect_fields = check_runtime_types(obj2, field_type_map)
+    assert set(incorrect_fields) == set([f for f in fields(MyDataclass) if f.name != "x"])

@@ -50,7 +50,7 @@ def test_init() -> None:
 
 def test_match_checks() -> None:
     n = XpathNested("test")
-    other_n = XpathNested("test")
+    other_n = XpathNested("test1")
 
     # Test node matching not belonging to the tree
     with pytest.raises(ValueError) as excinfo:

@@ -233,11 +233,10 @@ def test_child_field_match() -> None:
 
 def test_sequence_var_match() -> None:
     f1 = PTestChild1("predecessor")
-    f2 = f1.duplicate()  # not the same id, but same content
     only1 = PTestChild2("tail")
 
     node = PTestParent(
-        child_tuple=(f1, f2, only1),
+        child_tuple=(f1, f1, only1),
     )
 
     macher, msg = NodeMatcher.from_pattern("(PTestParent @child_tuple=[(*) -> cap $cap *])")
@@ -255,10 +254,8 @@ def test_child_spec_capture() -> None:
         sub_parent=None,
     )
 
-    sub2 = sub1.duplicate()
-
     node = PTestParent(
-        child_tuple=(sub1, sub2),
+        child_tuple=(sub1, sub1),
     )
 
     rule = "(PTestParent @child_tuple -> test_capture)"
@@ -268,15 +265,14 @@ def test_child_spec_capture() -> None:
     assert match is not None
     rule, values = match
     assert rule == "rule"
-    assert values["test_capture"] == (sub1, sub2)
+    assert values["test_capture"] == (sub1, sub1)
 
     # Test array capture with follow rules
     f1 = PTestChild1("predecessor")
-    f2 = f1.duplicate()
     only1 = PTestChild2("only1")
 
     node = PTestParent(
-        child_tuple=(f1, f2, only1, sub1, sub2),
+        child_tuple=(f1, f1, only1, sub1, sub1),
     )
 
     rule = "(PTestParent @child_tuple =[(PTestChild1) (*) (PTestChild2) -> only_capture *])"
@@ -297,4 +293,4 @@ def test_child_spec_capture() -> None:
     rule, values = match
     assert rule == "rule"
     assert values["first"] == f1
-    assert values["remaining"] == (f2, only1, sub1, sub2)
+    assert values["remaining"] == (f1, only1, sub1, sub1)

@@ -3,6 +3,7 @@ from typing import Generator, Protocol
 
 import pytest
 from pyoak import config
+from pyoak.registry import _REF_TO_NODE, reset_seed
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -24,6 +25,12 @@ def clean_ser_types():
     cached = pyoak.serialize.TYPES.copy()
     yield
     pyoak.serialize.TYPES = cached
+
+
+@pytest.fixture(autouse=True)
+def reset_registry():
+    reset_seed()
+    _REF_TO_NODE.clear()
 
 
 class ConfigFixtureProtocol(Protocol):

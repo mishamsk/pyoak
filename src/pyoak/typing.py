@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+import sys
 from collections.abc import Collection, MutableMapping, MutableSequence, MutableSet
 from dataclasses import KW_ONLY, InitVar, fields
 from dataclasses import Field as DataClassField
@@ -15,6 +15,7 @@ from typing import (
     NewType,
     Optional,
     Protocol,
+    Sequence,
     Tuple,
     Type,
     Union,
@@ -25,7 +26,10 @@ from typing import (
 
 from .error import InvalidFieldAnnotations
 
-logger = logging.getLogger(__name__)
+if sys.version_info < (3, 11):
+    # Hack to make dataclasses InitVar work with future annotations
+    # See https://stackoverflow.com/questions/70400639/how-do-i-get-python-dataclass-initvar-fields-to-work-with-typing-get-type-hints
+    InitVar.__call__ = lambda *args: None  # type: ignore
 
 # to make mypy happy
 Field = DataClassField[Any]
@@ -76,6 +80,21 @@ def is_tuple(type_: Any) -> bool:
         return True
     try:
         return issubclass(type_, (Tuple, tuple))  # type: ignore[arg-type]
+    except TypeError:
+        return False
+
+
+@cached
+def is_immutable_mapping(type_: Any) -> bool:
+    orig = get_origin(type_)
+    try:
+        if issubclass(orig, Mapping) and not issubclass(orig, MutableMapping):
+            return True
+    except TypeError:
+        pass
+
+    try:
+        return issubclass(type_, Mapping) and not issubclass(type_, MutableMapping)
     except TypeError:
         return False
 
@@ -362,18 +381,17 @@ def get_field_types(type_: type[DataclassInstance]) -> dict[Field, Any]:
     This recursively function unwraps NewType to the underlying type.
     """
     ret: dict[Field, Any] = {}
+    thints = get_type_hints(type_)
 
     for field in fields(type_):
-        f_type = field.type
-        if isinstance(f_type, str):
-            f_type = get_type_hints(type_).get(field.name)
+        f_type = thints.get(field.name, None)
 
         if f_type is None:
             raise RuntimeError(f"Could not determine type of field {field.name} for type {type_}")
 
         # Unwrap newtypes to not deal with them later
-        if is_new_type(f_type):  # type: ignore[arg-type]
-            f_type = unwrap_newtype(f_type)  # type: ignore[arg-type]
+        if is_new_type(f_type):
+            f_type = unwrap_newtype(f_type)
 
         ret[field] = f_type
 
@@ -466,6 +484,15 @@ def is_instance(value: Any, type_: Any) -> bool:
                     return False
                 return all(is_instance(item, item_type) for item, item_type in zip(value, args))
 
+        # Immutable mappings are special too
+        if is_immutable_mapping(type_):
+            if len(args) != 2:
+                raise RuntimeError(f"Unexpected collection type {type_}. Please, report a bug.")
+
+            return all(is_instance(item, args[0]) for item in value.keys()) and all(
+                is_instance(item, args[1]) for item in value.values()
+            )
+
         # Non-tuple collection with no args, assume True
         if not args:
             return True
@@ -484,3 +511,16 @@ def is_instance(value: Any, type_: Any) -> bool:
             return issubclass(value, get_args(type_)[0])
 
     return False
+
+
+def check_runtime_types(
+    type_: DataclassInstance, type_map: Mapping[Field, FieldTypeInfo]
+) -> Sequence[Field]:
+    incorrect_fields: list[Field] = []
+
+    for f, type_info in type_map.items():
+        val = getattr(type_, f.name)
+        if not is_instance(val, type_info.resolved_type):
+            incorrect_fields.append(f)
+
+    return incorrect_fields

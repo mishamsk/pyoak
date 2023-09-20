@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 from pyoak.node import ASTNode
@@ -109,6 +109,9 @@ def test_is_in_tree() -> None:
     r_tree = r.to_tree()
     assert all(r_tree.is_in_tree(n) for n in (n1, m_m, m_r, n2, m2, r))
     assert not r_tree.is_in_tree(TreeOtherNode("test"))
+
+    # Test that another instance which is a full copy also works
+    assert all(r_tree.is_in_tree(replace(n)) for n in (n1, m_m, m_r, n2, m2, r))
 
 
 def test_get_depth() -> None:
