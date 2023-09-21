@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+import pytest
 from pyoak.node import _REF_ATTR, ASTNode
 from pyoak.registry import (
     _REF_TO_NODE,
@@ -75,7 +76,13 @@ def test_pop_node() -> None:
     assert ref not in _REF_TO_NODE
 
     # Test popping a node that does not exist
-    assert _pop_node(n) is None
+    _pop_node(n) is None
+
+    # now test with a node that does not have a ref
+    object.__delattr__(n, _REF_ATTR)
+    # must raise AttributeError
+    with pytest.raises(AttributeError):
+        _pop_node(n)
 
 
 def test_set_reset_seed() -> None:

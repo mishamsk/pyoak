@@ -307,11 +307,13 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
     def detach(self) -> None:
         """Removes this node and and the whole tree rooted with this node from
         the registry."""
-        if _pop_node(self) is not None:
+        if self.ref is not None:
+            _pop_node(self)
             object.__delattr__(self, _REF_ATTR)
 
         for ni in self.dfs():
-            if _pop_node(ni.node) is not None:
+            if ni.node.ref is not None:
+                _pop_node(ni.node)
                 object.__delattr__(ni.node, _REF_ATTR)
 
     def detach_self(self) -> bool:
@@ -320,7 +322,8 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
         Returns:
             bool: True if the node was removed, False if it was not in the registry
         """
-        if _pop_node(self) is not None:
+        if self.ref is not None:
+            _pop_node(self)
             object.__delattr__(self, _REF_ATTR)
             return True
 

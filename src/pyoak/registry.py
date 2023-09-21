@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 import weakref
 from random import Random
-from typing import TYPE_CHECKING, Callable, Sequence
+from typing import TYPE_CHECKING, Callable, Iterable
 
 if TYPE_CHECKING:
     from .node import ASTNode
@@ -98,13 +98,13 @@ def _pop_node(node: ASTNode) -> ASTNode | None:
     Args:
         node (ASTNode): The node to remove.
 
+    Raises:
+        AttributeError: If the node does not have a ref value.
+
     Returns:
         ASTNode | None: The removed node or None if the node was not in the registry.
     """
-    if node.ref is None:
-        return None
-
-    return _REF_TO_NODE.pop(node.ref, None)
+    return _REF_TO_NODE.pop(node.ref_or_raise, None)
 
 
 def set_seed(seed: int) -> None:
@@ -141,7 +141,7 @@ def clear_registry() -> None:
     _REF_TO_NODE.clear()
 
 
-def pop_nodes(nodes: Sequence[ASTNode]) -> None:
+def pop_nodes(nodes: Iterable[ASTNode]) -> None:
     """Removes the nodes from the registry.
 
     Important: this function doesn't remove ref values from the nodes,
@@ -150,7 +150,7 @@ def pop_nodes(nodes: Sequence[ASTNode]) -> None:
     Use for testing purposes only.
 
     Args:
-        nodes (Sequence[ASTNode]): The nodes to remove.
+        nodes (Iterable[ASTNode]): The nodes to remove.
     """
     for node in filter(lambda n: n.ref is not None, nodes):
         _REF_TO_NODE.pop(node.ref, None)  # type: ignore[arg-type]
