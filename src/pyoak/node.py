@@ -260,7 +260,8 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
     ) -> _ASTNodeType | None:
         """Gets a node of this class type from the AST registry.
 
-        Only nodes that were previously added to the registry via `ASTNode.get_ref` method can be retrieved.
+        Only attached nodes can be retrieved. Attached nodes are those that were
+        either created with `attached=True` or created via `ASTNode.to_attached()` method.
 
         Args:
             ref (str | None): The ref value of the node to get. None is for convenience, since nodes may not have a ref value.
@@ -289,7 +290,8 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
     def get_any(cls, ref: str | None, default: ASTNode | None = None) -> ASTNode | None:
         """Gets a node of any type from the AST registry by ref id.
 
-        Only nodes that were previously added to the registry via `ASTNode.get_ref` method can be retrieved.
+        Only attached nodes can be retrieved. Attached nodes are those that were
+        either created with `attached=True` or created via `ASTNode.to_attached()` method.
 
         Args:
             ref (str | None): The ref value of the node to get. None is for convenience, since nodes may not have a ref value.
