@@ -342,7 +342,10 @@ class PatternDefInterpreter(Interpreter[str, BaseMatcher]):
 
                 last_matcher = self.visit(child)
             else:
-                # Must be ANY
+                # Must be ANY or ","
+                if child == ",":
+                    continue
+
                 assert child == "*"
 
                 if last_matcher is not None:
