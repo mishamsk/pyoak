@@ -305,11 +305,18 @@ NO_ORIGIN = NoOrigin()
 # ----------------------------- Source Classess ---------------------------------
 
 
+class _UnsetClass(str):
+    pass
+
+
+_UNSET = _UnsetClass()
+
+
 @dataclass(frozen=True)
 class SourceSet(Source):
     sources: tuple[Source, ...]
     # Everything else is set automatically
-    source_uri: str = field(default="UNSET", init=False)
+    source_uri: str = field(default=_UNSET, init=False)
     source_type: str = field(default="SourceSet", init=False)
     _raw: None = field(default=None, compare=False, repr=False, init=False)
 
@@ -342,12 +349,12 @@ class MemoryTextSource(TextSource):
     """Represents a text in memory source."""
 
     _raw: str | None = field(default=None, repr=False, compare=False)
-    source_uri: str = field(default="UNSET", kw_only=True)
+    source_uri: str = field(default=_UNSET, kw_only=True)
     # Everything else is set automatically
     source_type: str = field(default="<memory>", init=False)
 
     def __post_init__(self) -> None:
-        if self.source_uri == "UNSET":
+        if self.source_uri is _UNSET:
             object.__setattr__(self, "source_uri", f"{id(self)}")
 
         super().__post_init__()
@@ -362,7 +369,7 @@ class FileSource(Source):
 
     relative_path: Path
     # Everything else is set automatically
-    source_uri: str = field(default="UNSET", init=False)
+    source_uri: str = field(default=_UNSET, init=False)
     source_type: str = field(default="File", init=False)
     _raw: t.Any | None = field(default=None, compare=False, repr=False, init=False)
 
