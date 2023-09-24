@@ -99,8 +99,7 @@ def test_set_reset_seed() -> None:
 
 def test_clear_registry() -> None:
     # Test clearing the registry
-    n = RegistryTestNode("test")
-    registered = [n.to_attached() for _ in range(10)]  # noqa: F841
+    registered = [RegistryTestNode(f"{i}", attached=True) for i in range(10)]  # noqa: F841
     assert len(_REF_TO_NODE) == 10
 
     clear_registry()
@@ -108,8 +107,7 @@ def test_clear_registry() -> None:
 
 
 def test_pop_nodes() -> None:
-    n = RegistryTestNode("test")
-    registered = [n.to_attached() for _ in range(10)]
+    registered = [RegistryTestNode(f"{i}", attached=True) for i in range(10)]
     assert len(_REF_TO_NODE) == 10
 
     to_drop = registered[:5]

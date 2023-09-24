@@ -12,7 +12,7 @@ from rich.markup import escape
 from rich.tree import Tree
 
 from . import config
-from ._methods import eq_fn, hash_fn
+from ._methods import eq_fn, hash_fn, repr_fn
 from .codegen import (
     gen_and_yield_get_child_nodes,
     gen_and_yield_get_child_nodes_with_field,
@@ -61,6 +61,11 @@ def _attach(node: ASTNode, ref_id: str) -> None:
         raise ASTRefCollisionError(ref_id)
 
     object.__setattr__(node, _REF_ATTR, ref_id)
+
+
+def _detach(node: ASTNode) -> None:
+    _pop_node(node)
+    object.__delattr__(node, _REF_ATTR)
 
 
 # dataclasses prior to py3.11 didn't support __weakref__ slot
@@ -198,17 +203,42 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
     def ref_or_raise(self) -> str:
         """The registry reference of this node if it is attached or raise
         AttributeError if not."""
-        return cast(str, getattr(self, _REF_ATTR))
+        ref = getattr(self, _REF_ATTR, None)
+
+        if ref is None:
+            raise AttributeError(f"{self} is not attached to the registry")
+
+        return cast(str, ref)
+
+    @property
+    def is_attached(self) -> bool:
+        """Whether this node is attached to the registry."""
+        return getattr(self, _REF_ATTR, None) is not None
 
     @classmethod
     def _deserialize(cls, value: dict[str, Any]) -> ASTNode:
         # Get an optional ref value (to be non-destructive, mashumaro allows extra fields)
         ref_id = value.get(_REF_ATTR, None)
 
+        # If the node was serialized with ref, there are three distinct scenarios:
+        # - we have an identical node in the registry with the same ref.
+        #   E.g. if the node object wsa re-used in multiple places in the tree,
+        #   then serialized, and we are now deserializing non-first instance
+        # - the ref value is new and we need to register the node
+        # - we have non-identical node in the registry with the same ref. This
+        #   is a very unlikely UUID collision (or a bad test). We ignore this
+        #   to preserve the deserilization speed...
+        if ref_id is not None:
+            existing_node = _get_node(ref_id)
+            if existing_node is not None:
+                # Same node, just return it
+                return existing_node
+
+        # didn't find a node with the same ref, or no ref at all
         # create a new node as usual
         new_obj = super(ASTNode, cls)._deserialize(value)
 
-        # If the node was serialized with ref, try to register it
+        # if we have a ref, attach the node
         if ref_id is not None:
             _attach(new_obj, ref_id)
 
@@ -241,15 +271,28 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
 
         return out
 
-    def to_attached(self: _ASTNodeType) -> _ASTNodeType:
-        """Returns an attached copy of this node.
+    def attach(self) -> str:
+        """Attaches the node to the registry and returns the registry ref.
 
-        If the node is already attached, returns itself.
+        If the node is already attached, returns the existing ref.
+
+        Raises:
+            ASTRefCollisionError: if the node is detached, meaning it was previously attached
+             but then detached via a call to `detach_self` or `detach` (latter could have been
+             call on a parent).
+
+        Returns:
+            str: The registry ref of this node.
         """
-        if self.ref is not None:
-            return self
+        ref = getattr(self, _REF_ATTR, None)
 
-        return replace(self, attached=True)
+        if ref is not None:
+            return cast(str, ref)
+
+        new_ref = _register(self)
+        object.__setattr__(self, _REF_ATTR, new_ref)
+
+        return new_ref
 
     @classmethod
     def get(
@@ -306,35 +349,9 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
 
         return _get_node(ref, default)
 
-    def detach(self) -> None:
-        """Removes this node and and the whole tree rooted with this node from
-        the registry."""
-        if self.ref is not None:
-            _pop_node(self)
-            object.__delattr__(self, _REF_ATTR)
-
-        for ni in self.dfs():
-            if ni.node.ref is not None:
-                _pop_node(ni.node)
-                object.__delattr__(ni.node, _REF_ATTR)
-
-    def detach_self(self) -> bool:
-        """Removes this node from the registry.
-
-        Returns:
-            bool: True if the node was removed, False if it was not in the registry
-        """
-        if self.ref is not None:
-            _pop_node(self)
-            object.__delattr__(self, _REF_ATTR)
-            return True
-
-        return False
-
     def replace(self: _ASTNodeType, **kwargs: Any) -> _ASTNodeType:
         """Creates a new node by replacing values from `kwargs` and replacing
-        this node in the registry with a new one if it was previously
-        registered via `ASTNode.get_ref`.
+        this node in the registry with a new one if is attached.
 
         The difference vs. `dataclasses.replace`:
             - This method will remove the original node from the registry, if it was there
@@ -346,7 +363,6 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
 
         Raises:
             ValueError: see dataclasses.replace
-            ASTRefCollisionError: Unlikely, but may be raised if ref value collision occurs
 
         Returns:
             ASTNodeType: The new node
@@ -358,7 +374,7 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
             ref = self.ref
 
             # Detach the original node
-            self.detach_self()
+            _detach(self)
 
             # Register the new node with the same ref value
             _attach(new_node, ref)
@@ -367,8 +383,8 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
 
     def replace_with(self, other: _ASTNodeType) -> _ASTNodeType:
         """Replaces this node with another one by creating an attached copy of
-        the `other` node with the same ref as this node and replacing it in the
-        registry.
+        the `other` node with, assiging it the ref defined on this node and
+        replacing this node in the registry with the newly created one.
 
         If this node is not in the registry, returns the other node without
         modification.
@@ -376,8 +392,8 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
         Args:
             other (ASTNode): The node to replace this one with.
 
-        Raises:
-            ASTRefCollisionError: Unlikely, but may be raised if ref value collision occurs
+        Returns:
+            ASTNode: The original or the new attached copy of the `other` node.
         """
         if self.ref is None:
             return other
@@ -389,7 +405,7 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
         ref = self.ref
 
         # Detach the original node
-        self.detach_self()
+        _detach(self)
 
         # Register the new node with the same ref value
         _attach(other, ref)
@@ -792,12 +808,14 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
         return tree
 
     __hash__ = hash_fn
+    __repr__ = repr_fn
 
     def __init_subclass__(cls) -> None:
-        # Make sure subclasses use the same hash, eq functions
+        # Make sure subclasses use the same hash, eq, repr functions
         # instead of the standard slow dataclass approach
         cls.__hash__ = hash_fn  # type: ignore[assignment]
         cls.__eq__ = eq_fn  # type: ignore[assignment]
+        cls.__repr__ = repr_fn  # type: ignore[assignment]
 
         # Make sure subclass will use the functions that generate specialized
         # methods on the fly for each class
