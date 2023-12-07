@@ -19,7 +19,7 @@ packages = [{ include = "pyoak", from = "src" }]
 [tool.poetry.dependencies]
 python = ">=3.10"
 rich = ">=12.5.0, <14"
-mashumaro = ">=3.8.1,<3.9"
+mashumaro = ">=3.8.1"
 lark = "^1.1.5"
 pyyaml = "^6.0.0"
 orjson = "^3.8.7"
