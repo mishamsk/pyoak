@@ -1166,7 +1166,7 @@ class ASTNode(DataClassSerializeMixin):
                 return t.cast(ASTNodeType, ancestor)
 
             if not exact_type and isinstance(ancestor, ancestor_classes):
-                return t.cast(ASTNodeType, ancestor)
+                return ancestor
 
         return None
 

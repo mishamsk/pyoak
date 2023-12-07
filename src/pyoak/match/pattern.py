@@ -564,11 +564,11 @@ class ASTMatchingLexer(Lexer):
 
         self._cname_re = re.compile(r"^[_a-z](\w+)", flags=re.IGNORECASE)
 
-    def lex(self, lexer_state: LexerState, parser_state: ParserState) -> Iterator[Token]:
+    def lex(self, lexer_state: LexerState, parser_state: ParserState[Any]) -> Iterator[Token]:
         return self._feed_ast_node(cast(ASTNode, lexer_state.text), parser_state)
 
     def _feed_ast_node(
-        self, node: ASTNode, parser_state: ParserState
+        self, node: ASTNode, parser_state: ParserState[Any]
     ) -> Generator[Token, None, None]:
         # First the grammar expects a LPAR
         yield ASTToken("LPAR", "(", ASTTokenType.DELIM, ast_nodes=[node])
