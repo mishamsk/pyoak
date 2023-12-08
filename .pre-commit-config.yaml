@@ -8,10 +8,15 @@ repos:
         args: [--markdown-linebreak-ext=md]
         exclude: ".bumpversion.cfg$"
       - id: check-added-large-files
-  - repo: https://github.com/ambv/black
-    rev: 23.7.0
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Ruff version.
+    rev: v0.1.6
     hooks:
-      - id: black
+      # Run the linter.
+      - id: ruff
+        args: ["--fix", "--exit-non-zero-on-fix"]
+      # Run the formatter.
+      - id: ruff-format
   - repo: https://github.com/charliermarsh/ruff-pre-commit
     rev: "v0.0.280"
     hooks:
@@ -23,7 +28,7 @@ repos:
       - id: docformatter
         args: ["--in-place"]
   - repo: https://github.com/python-poetry/poetry
-    rev: "1.5.0"
+    rev: "1.5.1"
     hooks:
       - id: poetry-check
         files: ^pyproject.toml$

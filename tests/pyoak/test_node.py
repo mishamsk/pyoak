@@ -1054,7 +1054,10 @@ def test_ast_test_serialization_dialect() -> None:
     ParentNode.from_dict(serialized_dialect_dict)
 
 
+@pytest.mark.dep_msgpack
 def test_to_msgpack() -> None:
+    pytest.importorskip("msgpack")
+
     ch_nodes: list[ASTNode] = []
     ch_count = 10
     for i in range(ch_count):
