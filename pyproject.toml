@@ -25,14 +25,16 @@ chardet = "^5.0.0"
 
 # Optional serialization dependencies
 pyyaml = { version = "^6.0.0", optional = true }
+"ruamel.yaml" = { version = "^0.18.5", optional = true }
 orjson = { version = "^3.8.7", optional = true }
 msgpack = { version = "^1.0.4", optional = true }
 
 [tool.poetry.extras]
 msgpack = ["msgpack"]
 orjson = ["orjson"]
-yaml = ["pyyaml"]
-all = ["msgpack", "orjson", "pyyaml"]
+pyyaml = ["pyyaml"]
+ruamel = ["ruamel.yaml"]
+all = ["msgpack", "orjson", "ruamel.yaml"]
 
 [tool.poetry.group.dev.dependencies]
 bump2version = "^1.0.1"
@@ -65,7 +67,8 @@ addopts = "--basetemp=testtemp"
 markers = [
     "dep_msgpack: test msgpack optional dependency",
     "dep_orjson: test orjson optional dependency",
-    "dep_yaml: test yaml optional dependency",
+    "dep_pyyaml: test pyyaml optional dependency",
+    "dep_ruamel: test ruamel yaml optional dependency",
     "dep_all: test with all optional dependencies",
 ]
 

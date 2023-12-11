@@ -78,17 +78,38 @@ except ImportError:
 
 
 _HAS_YAML = False
-YamlLoader = None
-YamlDumper = None
-
 try:
-    import yaml
+    import ruamel.yaml
+    from ruamel.yaml.compat import StringIO
 
-    YamlLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
-    YamlDumper = getattr(yaml, "CDumper", yaml.Dumper)
+    ruamel_yaml = ruamel.yaml.YAML(typ="rt", pure=False)
+
+    def yaml_dumper(value: dict[str, Any]) -> str:
+        stream = StringIO()
+        ruamel_yaml.dump(value, stream)
+        return stream.getvalue()  # type: ignore
+
+    def yaml_loader(value: bytes | str) -> dict[str, Any]:
+        return ruamel_yaml.load(value)  # type: ignore
+
     _HAS_YAML = True
 except ImportError:
-    pass
+    try:
+        import yaml
+
+        YamlLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+        YamlDumper = getattr(yaml, "CDumper", yaml.Dumper)
+
+        def yaml_dumper(value: dict[str, Any]) -> str:
+            return yaml.dump(value, Dumper=YamlDumper)
+
+        def yaml_loader(value: bytes | str) -> dict[str, Any]:
+            return yaml.load(value, Loader=YamlLoader)  # type: ignore
+
+        _HAS_YAML = True
+    except ImportError:
+        pass
+
 
 TYPES: dict[str, Type[DataClassSerializeMixin]] = {}
 
@@ -404,8 +425,6 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
         ) -> str:
             """Serialize this object to YAML (as a string).
 
-            Mashumaro dialects are not supported for this method.
-
             Args:
                 mashumaro_dialect (Dialect, optional): The Mashumaro dialect to use for serialization.
                 serialization_options (dict[str, Any], optional): Additional options that may be accessed by subclasses
@@ -415,14 +434,11 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
                 str: The serialized object.
 
             """
-            return yaml.dump(
-                (
-                    self.as_dict(
-                        mashumaro_dialect=mashumaro_dialect,
-                        serialization_options=serialization_options,
-                    )
-                ),
-                Dumper=YamlDumper,
+            return yaml_dumper(
+                self.as_dict(
+                    mashumaro_dialect=mashumaro_dialect,
+                    serialization_options=serialization_options,
+                )
             )
 
         @classmethod
@@ -433,8 +449,6 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
             serialization_options: dict[str, Any] | None = None,
         ) -> T:
             """Deserialize this object from YAML (as a string).
-
-            Mashumaro dialects are not supported for this method.
 
             Args:
                 value (str): The serialized object.
@@ -448,7 +462,7 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
             """
 
             return cls.as_obj(
-                yaml.load(value, Loader=YamlLoader) or {},  # type: ignore[arg-type]
+                yaml_loader(value) or {},
                 mashumaro_dialect=mashumaro_dialect,
                 serialization_options=serialization_options,
             )
