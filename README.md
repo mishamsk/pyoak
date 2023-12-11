@@ -19,9 +19,6 @@ Commerial-grade, well tested, documented and typed Python library for modeling, 
 * ... and more!
 
 ## Feature Roadmap<!-- omit from toc -->
-* Pattern matcher rewrite to a bespoke engine to avoid limitations of the current implementation
-* Context-aware pattern matching
-* Prettyfiyng pattern matching language to make it more friendly
 * Strict-mode with runtime field value type checking
 * Frozen version of ASTNode
 * ~~rustify some parts for performance~~ well, that's too far-fetched
@@ -342,11 +339,30 @@ Types are instance comparisons, so any subclass matches a type.
 
 #### Pattern Matching
 
-Pattern matching is done using a "matcher" object. You first create it with a list of patterns you'd like to match against and then execute `match` against a node. The first pattern that matches will be returned.
+Pattern matching is done using a "matcher" object. There are two of them:
+* `MultiPatternMatcher` for matching against multiple patterns
+* `NodeMatcher` for matching against a single pattern
+
+To create a `NodeMatcher`:
+```python
+macher, msg = NodeMatcher.from_pattern("(RootClass @child_tuple=[(*) -> cap $cap *])")
+assert macher is not None, msg
+```
+
+and then match:
+```python
+node = RootClass(child_tuple=(c1, c2, tail), origin=CodeOrigin())
+
+ok, match_dict = macher.match(node)
+assert ok
+assert match_dict["cap"] == f1
+```
+
+With `MultiPatternMatcher` you'll first create it with a list of patterns you'd like to match against and then execute `match` against a node.
 
 ```python
-matcher = PatternMatcher(
-    [("rule1", '(Literal #[value="re.*ex"])'), ("rule2", '(IntLiteral #[value="1"])')]
+matcher = MultiPatternMatcher(
+    [("rule1", '(Literal #value="re.*ex")'), ("rule2", '(IntLiteral #value="1")')]
 )
 match = matcher.match(node)
 ```
@@ -356,14 +372,12 @@ the result will be either `None`, meaning no pattern matched, or a tuple of the 
 The match dict will contain a mapping from capture keys to values. Capture keys are the names you can embed within the pattern to store something within the matched node. E.g.:
 
 ```python
-matcher = PatternMatcher([("rule", "(ParentType @[child_tuple_field =[(Literal) !! -> first_child, * -> remaining_children]])")])
+matcher = MultiPatternMatcher([("rule", "(ParentType @child_tuple_field =[(Literal) -> first_child, * -> remaining_children])")])
 ```
 
 this pattern matches any subclass of `ParentType` that has a child field `child_tuple_field` which is a sequence, first child of type Literal and then zero or more children of any type and shape.
 
 The capture key `first_child` will be mapped to the first child of the node that matched the pattern and `remaining_children` will be mapped to a tuple of the remaining children.
-
-> :warning: pattern matching is known to have some quirks, so use with caution. Upgrade of the internal engine is the main item on the [feature roadmap](#feature-roadmap).
 
 ### Visitors & Transformers
 
