@@ -135,6 +135,14 @@ def test_text_file_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     test_file_rel_path.write_text("Test", encoding="windows-1252")
     assert s.get_raw() == "Test"
 
+    # test with reader
+    assert (
+        TextFileSource(test_file_rel_path).get_raw(
+            reader=lambda p: p.read_text(encoding="windows-1252")
+        )
+        == "Test"
+    )
+
     serialized = s.to_json()
     # _raw should not be serialized
     assert "_raw" not in serialized
@@ -289,7 +297,7 @@ def test_code_origin(test_file: TextFileSource) -> None:
     assert o.get_raw() == "23\n456\n"
 
     o = CodeOrigin(s, CodeRange(CodePoint(18, 2, 2), CodePoint(29, 5, 1)))
-    assert o.get_raw() == "23\n456\n789\n"
+    assert o.get_raw(lambda p: p.read_text()) == "23\n456\n789\n"
 
     Source.clear_registry()
     deserialized = CodeOrigin.from_json(o.to_json())

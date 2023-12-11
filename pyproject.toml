@@ -21,7 +21,6 @@ python = ">=3.10"
 rich = ">=12.5.0, <14"
 mashumaro = ">=3.8.1"
 lark = "^1.1.5"
-chardet = "^5.0.0"
 
 # Optional serialization dependencies
 pyyaml = { version = "^6.0.0", optional = true }

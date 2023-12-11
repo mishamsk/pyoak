@@ -24,7 +24,6 @@ Commerial-grade, well tested, documented and typed Python library for modeling, 
 * Prettyfiyng pattern matching language to make it more friendly
 * Strict-mode with runtime field value type checking
 * Frozen version of ASTNode
-* Make orjson, pyyaml, msgpack & chardet optional dependencies
 * ~~rustify some parts for performance~~ well, that's too far-fetched
 
 ## Table of Contents <!-- omit from toc -->

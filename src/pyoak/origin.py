@@ -7,7 +7,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .file import read_text_unknown_encoding
 from .serialize import TYPE_KEY, DataClassSerializeMixin
 
 if t.TYPE_CHECKING:
@@ -419,16 +418,22 @@ class ZippedFileSource(FileSource):
 class TextFileSource(FileSource, TextSource):
     """Represents a text file source."""
 
-    def _load_raw(self) -> None:
+    def _load_raw(self, reader: t.Callable[[Path], str | None] | None = None) -> None:
         if self.relative_path.exists() and self.relative_path.is_file():
             try:
-                object.__setattr__(self, "_raw", read_text_unknown_encoding(self.relative_path))
+                object.__setattr__(
+                    self,
+                    "_raw",
+                    reader(self.relative_path)
+                    if reader is not None
+                    else self.relative_path.read_text(),
+                )
             except Exception:
                 logger.exception(f"Failed to read file {self.relative_path}")
 
-    def get_raw(self) -> str | None:
+    def get_raw(self, reader: t.Callable[[Path], str | None] | None = None) -> str | None:
         if self._raw is None:
-            self._load_raw()
+            self._load_raw(reader)
 
         return self._raw
 
@@ -682,9 +687,12 @@ class CodeOrigin(Origin):
     source: Source
     position: CodeRange
 
-    def get_raw(self) -> str | None:
+    def get_raw(self, reader: t.Callable[[Path], str | None] | None = None) -> str | None:
         """Returns the code chunk inside this range."""
-        code = self.source.get_raw()
+        if isinstance(self.source, TextFileSource):
+            code = self.source.get_raw(reader)
+        else:
+            code = self.source.get_raw()
 
         if not isinstance(code, str):
             return None
@@ -712,7 +720,7 @@ class GeneratedCodeOrigin(CodeOrigin):
     source: Source
     position: CodeRange = field(default=EMPTY_CODE_RANGE, init=False)
 
-    def get_raw(self) -> None:
+    def get_raw(self, reader: t.Any | None = None) -> None:
         return None
 
 
