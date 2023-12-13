@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 from pyoak.node import ASTNode, ASTVisitor
-from pyoak.origin import NoOrigin
+from pyoak.origin import NO_ORIGIN
 
 
 @dataclass
@@ -23,8 +23,8 @@ class VisitorTestParentNode(ASTNode):
 
 
 def test_visitor() -> None:
-    test_child = VisitorTestSubclassChildNode("test", "test2", origin=NoOrigin())
-    test_parent = VisitorTestParentNode(test_child, origin=NoOrigin())
+    test_child = VisitorTestSubclassChildNode("test", "test2", origin=NO_ORIGIN)
+    test_parent = VisitorTestParentNode(test_child, origin=NO_ORIGIN)
 
     class NonStrictVisitor(ASTVisitor[list[str]]):
         def generic_visit(self, node: ASTNode) -> list[str]:

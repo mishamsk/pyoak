@@ -99,7 +99,7 @@ unfixable = ["B"]
 
 [tool.ruff.per-file-ignores]
 "__init__.py" = ["F401"]
-"tests/*" = ["B", "PERF401"]
+"tests/*" = ["B", "PERF401", "F821"]
 
 [tool.ruff.mccabe]
 max-complexity = 18

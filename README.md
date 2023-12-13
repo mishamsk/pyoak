@@ -33,6 +33,8 @@ Commerial-grade, well tested, documented and typed Python library for modeling, 
     - [Creating a Node](#creating-a-node)
     - [~~Mutating~~ Applying Changes to a Node](#mutating-applying-changes-to-a-node)
     - [Traversal](#traversal)
+        - [Going Down the Tree](#going-down-the-tree)
+        - [Going Up the Tree](#going-up-the-tree)
     - [Other Helpers](#other-helpers)
     - [Xpath \& Pattern Matching](#xpath--pattern-matching)
         - [Xpath](#xpath)
@@ -220,13 +222,6 @@ in this scenario, pyoak will check if the id is unique. If it is not, it will cr
 
 This is helpful if you have some natural id from the parsing source and you want to catch duplicates.
 
-You can also pass `ensure_unique_id=True` to raise an exception instead.
-
-```python
-int_val1 = NumberLiteral(value=1, origin=NoOrigin(), id="some_id")
-int_val2 = NumberLiteral(value=1, origin=NoOrigin(), id="some_id", ensure_unique_id=True) # will raise ASTNodeIDCollisionError
-```
-
 There are other optional init-only arguments to create a detached node, to mark id collision as a duplicate rather than a collision. There are also more exceptions that may be raised, e.g. if you try to create a node with children that are already children of another node. Refer to the docstrings for more details.
 
 ### ~~Mutating~~ Applying Changes to a Node
@@ -245,6 +240,8 @@ There is also a second method: `replace_with`. It allows you to replace the enti
 Unlike `replace`, it does a runtime check against the parent if a node you are changing has one. Thus ensuring that the change is type safe.
 
 ### Traversal
+
+#### Going Down the Tree
 
 Each node, even a detached one, knows about its children:
 
@@ -266,7 +263,7 @@ parent = node.parent
 But that's not all. There are multiple helpers to traverse down the tree:
 
 ```python
-for num_lits in node.dfs(skip_self=False, filter=lambda n: isinstance(n, NumberLiteral)):
+for num_lits in node.dfs(filter=lambda n: isinstance(n.node, NumberLiteral)):
     print(num_lits.value)
 
 # or using a shorthand
@@ -278,15 +275,26 @@ for num_lits in node.gather(NumberLiteral):
 list(node.bfs(filter=important_nodes, prune=stop_at))
 ```
 
-check the docstring for full parameter documentation.
+Note, that these methods return an generator, so you can stop the traversal at any time. Also, worth mentioning that the node itself is not yielded.
 
-There are also helpers & shorthands for traversing up the tree:
+#### Going Up the Tree
+
+If you need to search "up" the tree, you need to use the `Tree` instance created from the root node:
 
 ```python
-for ancestor in node.ancestors():
+tree = Tree(root_node)
+# or
+tree =root_node.to_tree()
+```
+
+Now you can use multiple methods:
+```python
+parent = tree.get_parent(node) # to get the parent of the node
+
+for ancestor in tree.get_ancestors(node):
     print(ancestor)
 
-parent_stmt = expr_node.get_first_ancestor_of_type(Stmt)
+parent_stmt = tree.get_first_ancestor_of_type(expr_node, Stmt)
 ```
 
 ### Other Helpers
@@ -310,13 +318,25 @@ Pattern matching is concerned with matching nodes by their content, including th
 
 #### Xpath
 
-To match, you must create an ASTXpath object and call its `match` method:
+If you want to find all sub-nodes matching a given xpath starting a given node, you can use the `find` and `findall` methods:
+
+```python
+root_node = parse("some code")
+for node in root_node.findall("//IntLiteral"):
+    print(node.value)
+```
+
+If you want to match a given node, i.e. check if it's in the path, you must create an ASTXpath object and call its `match` method:
 
 ```python
 from pyoak.match.xpath import ASTXpath
 
+root_node = parse("some code")
 xpath = ASTXpath("//IntLiteral")
-assert IntLiteral(value=1).match(xpath)
+
+...
+if xpath.match(root_node, some_node):
+    print("Matched!")
 ```
 
 **Syntax**

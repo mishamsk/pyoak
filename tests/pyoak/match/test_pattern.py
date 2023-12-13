@@ -5,9 +5,9 @@ from dataclasses import dataclass, field
 import pytest
 from pyoak.match.pattern import MultiPatternMatcher, NodeMatcher, validate_pattern
 from pyoak.node import ASTNode
-from pyoak.origin import NoOrigin
+from pyoak.origin import NO_ORIGIN
 
-origin = NoOrigin()
+origin = NO_ORIGIN
 
 
 @dataclass
