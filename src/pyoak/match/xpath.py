@@ -235,21 +235,26 @@ class ASTXpath:
         can be found in the LICENSE.txt file in the project root.
 
         """
-        work: list[ASTNode] = [_DUMMY_XPATH_ROOT(root, origin=NO_ORIGIN)]
+        # Using dict, because set is not ordered
+        # Using node ids as keys, because ASTNode is not hashable
+        work: dict[str, ASTNode] = {"_DUMMY_XPATH_ROOT": _DUMMY_XPATH_ROOT(root, origin=NO_ORIGIN)}
 
         for el in self._elements:
-            new_work: list[ASTNode] = []
+            new_work: dict[str, ASTNode] = {}
 
-            for node in work:
+            for node in work.values():
                 if el.anywhere:
-                    new_work.extend(
-                        [n for n in node.dfs(skip_self=True) if _match_node_element(n, el)]
-                    )
+                    for n in node.dfs(skip_self=True):
+                        if _match_node_element(n, el):
+                            # Insert into our "ordered set" only if not already in there
+                            # this is to prefer first insertion order
+                            if n.id not in new_work:
+                                new_work[n.id] = n
                 else:
-                    new_work.extend(
-                        [n for n in node.get_child_nodes() if _match_node_element(n, el)]
-                    )
-
+                    for n in node.get_child_nodes():
+                        if _match_node_element(n, el):
+                            if n.id not in new_work:
+                                new_work[n.id] = n
             work = new_work
 
-        yield from new_work
+        yield from new_work.values()
