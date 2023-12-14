@@ -21,7 +21,6 @@ from typing import (
     Iterator,
     Literal,
     Mapping,
-    NamedTuple,
     Sequence,
     TypeVar,
     cast,
@@ -32,6 +31,7 @@ from rich.tree import Tree
 
 from .error import (
     ASTNodeDuplicateChildrenError,
+    ASTNodeIDCollisionError,
     ASTNodeParentCollisionError,
     ASTNodeRegistryCollisionError,
     ASTNodeReplaceError,
@@ -44,7 +44,6 @@ from .serialize import TYPE_KEY, DataClassSerializeMixin
 
 if TYPE_CHECKING:
     from .match.xpath import ASTXpath
-    from .tree import Tree as PyOakTree
 
 logger = logging.getLogger(__name__)
 
@@ -59,19 +58,6 @@ ChildIndex = int
 
 UNSET_ID = "~~~UNSET~~~"  # Hopefully no one will ever use this as an ID
 CONTENT_ID_FIELD = "_content_id"
-
-
-# Alternative implementations of dunder methods
-def _hash_fn(node: ASTNode) -> int:
-    return hash(node.id)
-
-
-def _eq_fn(self: ASTNode, other: ASTNode) -> bool:
-    # Other typed as ASTNode to make mypy happy
-    if other.__class__ is self.__class__:
-        return self.content_id == other.content_id and self.origin == other.origin
-
-    return False
 
 
 # Hack to make dataclasses InitVar work with future annotations
@@ -148,14 +134,6 @@ def _set_xpath(node: ASTNode, parent_xpath: str) -> None:
         _set_xpath(child, xpath)
 
 
-# Named Tuple for tree traversal functions
-class NodeTraversalInfo(NamedTuple):
-    node: ASTNode
-    parent: ASTNode
-    field: Field
-    findex: int | None = None
-
-
 class ASTSerializationDialects(enum.Enum):
     AST_EXPLORER = enum.auto()
     AST_TEST = enum.auto()
@@ -223,8 +201,8 @@ class ASTNode(DataClassSerializeMixin):
         compare=False,
         kw_only=True,
     )
-    """An ID of attached node whose Id was the same when this node was created (without
-    create_as_duplicate option) or None if there was no collision.
+    """An ID of attached node whose Id was the same when this node was created (with
+    ensure_unique_id option) or None if there was no collision.
 
     Set automatically, DO NOT SET MANUALLY.
 
@@ -264,11 +242,15 @@ class ASTNode(DataClassSerializeMixin):
 
     """
 
+    ensure_unique_id: InitVar[bool] = field(default=False, kw_only=True)
+    """When set to True, if a new node being created has non-unique ID an ASTNodeIDCollisionError
+    exception is raised."""
+
     create_as_duplicate: InitVar[bool] = field(default=False, kw_only=True)
     """When set to True, if node collision registered, it is recorded as node duplication, not id
-    collision.
+    collision. This is similar to getting the node from the registry and calling `duplicate` on it.
 
-    This is similar to getting the node from the registry and calling `duplicate` on it.
+    This overrides `ensure_unique_id`.
 
     """
 
@@ -289,6 +271,7 @@ class ASTNode(DataClassSerializeMixin):
 
     def __post_init__(
         self,
+        ensure_unique_id: bool,
         create_as_duplicate: bool,
         create_detached: bool,
     ) -> None:
@@ -321,14 +304,20 @@ class ASTNode(DataClassSerializeMixin):
             new_id = self.id
 
         if not create_detached:
-            if ASTNode._nodes.get(new_id) is not None:
+            if (existing_node := ASTNode._nodes.get(new_id)) is not None:
                 # Node with the same ID already exists
-                if not create_as_duplicate:
-                    id_collision_with = new_id
-                else:
-                    original_id = new_id
+                if not ensure_unique_id or create_as_duplicate:
+                    # We are ok if this is a duplicate node (contains the same data) but want to make sure that the ID is unique
 
-                new_id = _get_next_unique_id(new_id)
+                    if not create_as_duplicate:
+                        id_collision_with = new_id
+                    else:
+                        original_id = new_id
+
+                    new_id = _get_next_unique_id(new_id)
+                else:
+                    # Check and register in global registry
+                    raise ASTNodeIDCollisionError(existing_node, self.__class__)
 
             # self.original_id & self.id_collision_with are supposed to be coming
             # from deserialization (user should not set them manually).
@@ -434,6 +423,7 @@ class ASTNode(DataClassSerializeMixin):
                 skip_origin=True,
                 skip_original_id=True,
                 skip_id_collision_with=True,
+                skip_hidden=True,
                 skip_non_compare=True,
             ),
             key=lambda x: x[1].name,
@@ -1267,127 +1257,106 @@ class ASTNode(DataClassSerializeMixin):
 
             yield getattr(self, f.name), f
 
-    def to_tree(self) -> PyOakTree:
-        """Returns a pyoak.tree.Tree object with this node as root."""
-
-        from .tree import Tree as PyOakTree
-
-        return PyOakTree(self)
-
     def dfs(
         self,
-        prune: Callable[[NodeTraversalInfo], bool] | None = None,
-        filter: Callable[[NodeTraversalInfo], bool] | None = None,
+        prune: Callable[[ASTNode], bool] | None = None,
+        filter: Callable[[ASTNode], bool] | None = None,
         bottom_up: bool = False,
-    ) -> Generator[NodeTraversalInfo, None, None]:
-        """Returns a generator object which yields all nodes in a tree, with this node as root in
-        the DFS (Depth-first) order. It doesn't yield the node itself.
+        skip_self: bool = False,
+    ) -> Generator[ASTNode, None, None]:
+        """Returns a generator object which visits all nodes in this tree in the DFS (Depth-first)
+        order.
 
         Args:
-            prune (Callable[[NodeTraversalInfo], bool] | None, optional):
-                An optional function which if it returns True will prevent
-                further decent into the children of this element.
-            filter (Callable[[NodeTraversalInfo], bool] | None, optional):
-                An optional function which if it returns False will prevent
-                the element from being yielded, but won't interrupt the recursive decent/ascent.
+            prune (Callable[[ASTNode], bool] | None, optional): An optional function which if it returns True will prevent further decent into the children of this element.
+            filter (Callable[[ASTNode], bool] | None, optional): An optional function which if it returns False will prevent the element from being yielded, but won't interrupt the recursive decent/ascent.
             bottom_up (bool, optional): Enables bottom up traversal. Defaults to False.
+            skip_self (bool, optional): Doesn't yield self. Defaults to False.
 
         Yields:
-            Generator[NodeTraversalInfo, None, None]:
-                A generator object which yields all sub-nodes in the DFS (Depth-first) order.
+            Generator[ASTNode, None, None]: A generator object which visits all nodes in this tree in the DFS (Depth-first) order.
 
         """
+        build_queue: Deque[ASTNode] = deque([self])
+        yield_queue: Deque[ASTNode] = deque()
 
-        build_stack: list[NodeTraversalInfo] = []
-        yield_queue: Deque[NodeTraversalInfo] = deque()
+        while build_queue:
+            child = build_queue.popleft()
 
-        if bottom_up:
-            appender = yield_queue.appendleft
-        else:
-            appender = yield_queue.append
+            if not skip_self:
+                if filter is None or filter(child):
+                    if bottom_up:
+                        yield_queue.appendleft(child)
+                    else:
+                        yield_queue.append(child)
 
-        children_info = list(self.get_child_nodes_with_field())
+                if prune and prune(child):
+                    continue
+            else:
+                skip_self = False
 
-        if not bottom_up:
-            children_info.reverse()
-
-        for c, f, i in children_info:
-            build_stack.append(NodeTraversalInfo(c, self, f, i))
-
-        while build_stack:
-            child_info = build_stack.pop()
-
-            if filter is None or filter(child_info):
-                appender(child_info)
-
-            if prune and prune(child_info):
-                continue
-
-            children_info = list(child_info.node.get_child_nodes_with_field())
-
-            if not bottom_up:
-                children_info.reverse()
-
-            for c, f, i in children_info:
-                build_stack.append(NodeTraversalInfo(c, child_info.node, f, i))
+            # Walk through children
+            if bottom_up:
+                for c in child.get_child_nodes():
+                    build_queue.appendleft(c)
+            else:
+                for c in reversed(child.children):
+                    build_queue.appendleft(c)
 
         while yield_queue:
             yield yield_queue.popleft()
 
     def bfs(
         self,
-        prune: Callable[[NodeTraversalInfo], bool] | None = None,
-        filter: Callable[[NodeTraversalInfo], bool] | None = None,
-    ) -> Generator[NodeTraversalInfo, None, None]:
+        prune: Callable[[ASTNode], bool] | None = None,
+        filter: Callable[[ASTNode], bool] | None = None,
+        skip_self: bool = False,
+    ) -> Generator[ASTNode, None, None]:
         """Returns a generator object which visits all nodes in this tree in the BFS (Breadth-first)
         order.
 
         Args:
-            prune (Callable[[NodeTraversalInfo], bool]): An optional function which if it returns True will prevent further decent into the children of this element.
-            filter (Callable[[NodeTraversalInfo], bool]): An optional function which if it returns False will prevent the element from being yielded, but won't interrupt the recursive decent.
+            prune (Callable[[ASTNode], bool]): An optional function which if it returns True will prevent further decent into the children of this element.
+            filter (Callable[[ASTNode], bool]): An optional function which if it returns False will prevent the element from being yielded, but won't interrupt the recursive decent.
 
         Returns:
             the generator object.
 
         """
-
-        queue: Deque[NodeTraversalInfo] = deque(
-            (NodeTraversalInfo(c, self, f, i) for c, f, i in self.get_child_nodes_with_field())
-        )
+        queue: Deque[ASTNode] = deque([self])
 
         while queue:
             child = queue.popleft()
 
-            if filter is None or filter(child):
-                yield child
+            if not skip_self:
+                if filter is None or filter(child):
+                    yield child
 
-            if prune and prune(child):
-                continue
+                if prune and prune(child):
+                    continue
+            else:
+                skip_self = False
 
             # Walk through children
-            queue.extend(
-                NodeTraversalInfo(c, child.node, f, i)
-                for c, f, i in child.node.get_child_nodes_with_field()
-            )
+            queue.extend(child.get_child_nodes())
 
     def gather(
         self,
         obj_class: type[ASTNodeType] | tuple[type[ASTNodeType], ...],
         *,
         exact_type: bool = False,
-        extra_filter: Callable[[NodeTraversalInfo], bool] | None = None,
-        prune: Callable[[NodeTraversalInfo], bool] | None = None,
+        extra_filter: Callable[[ASTNode], bool] | None = None,
+        prune: Callable[[ASTNode], bool] | None = None,
+        skip_self: bool = False,
     ) -> Generator[ASTNodeType, None, None]:
         """Shorthand for traversing the tree and gathering all instances of subclasses of
         `obj_class` or exactly `obj_class` if `exact_type` is True.
 
-        This function will not yield the node itself.
-
         Args:
             obj_class (type[ASTNodeType] | tuple[type[ASTNodeType], ...]): any ASTNode subclass or Tuple of classes to gather.
             exact_type (bool, optional): Whether to only gather instances of `obj_class` and not its subclasses. Defaults to False.
-            extra_filter (Callable[[NodeTraversalInfo], bool] | None, optional): An optional additional filter to apply when gathering. Defaults to None.
-            prune (Callable[[NodeTraversalInfo], bool] | None, optional): Optional function to stop traversal. Defaults to None.
+            extra_filter (Callable[[ASTNode], bool] | None, optional): An optional additional filter to apply when gathering. Defaults to None.
+            prune (Callable[[ASTNode], bool] | None, optional): Optional function to stop traversal. Defaults to None.
             skip_self (bool, optional): Whether to skip the node that this method is called from. Defaults to False.
 
         Yields:
@@ -1402,20 +1371,16 @@ class ASTNode(DataClassSerializeMixin):
 
         if not exact_type:
 
-            def filter_fn(node_info: NodeTraversalInfo) -> bool:
-                return isinstance(node_info.node, obj_classes) and (
-                    extra_filter is None or extra_filter(node_info)
-                )
+            def filter_fn(obj: ASTNode) -> bool:
+                return isinstance(obj, obj_classes) and (extra_filter is None or extra_filter(obj))
 
         else:
 
-            def filter_fn(node_info: NodeTraversalInfo) -> bool:
-                return type(node_info.node) in obj_classes and (
-                    extra_filter is None or extra_filter(node_info)
-                )
+            def filter_fn(obj: ASTNode) -> bool:
+                return type(obj) in obj_classes and (extra_filter is None or extra_filter(obj))
 
-        for n_info in self.dfs(prune=prune, filter=filter_fn, bottom_up=False):
-            yield cast(ASTNodeType, n_info.node)
+        for elem in self.dfs(prune=prune, filter=filter_fn, bottom_up=False, skip_self=skip_self):
+            yield cast(ASTNodeType, elem)
 
     def find(self, xpath: str | ASTXpath) -> ASTNode | None:
         """Finds a node by xpath.
@@ -1638,13 +1603,10 @@ class ASTNode(DataClassSerializeMixin):
 
         return tree
 
-    __hash__ = _hash_fn
+    __hash__ = None  # type: ignore # Make sure even frozen dataclasses will not be hashable
 
     def __init_subclass__(cls) -> None:
-        # Make sure subclasses use the same hash, eq functions
-        # instead of the standard slow dataclass approach
-        cls.__hash__ = _hash_fn  # type: ignore[assignment]
-        cls.__eq__ = _eq_fn  # type: ignore[assignment]
+        cls.__hash__ = None  # type: ignore # Make sure even frozen dataclasses will not be hashable
 
         # Make sure each class uses it's own list of child fields & properties
         # We do not set them until first access due forwared references
@@ -1860,7 +1822,7 @@ class ASTTransformVisitor(ASTVisitor[ASTNode | None]):
 class ASTTransformer(ABC):
     """A transformer base class for AST nodes."""
 
-    def prune(self, node_info: NodeTraversalInfo) -> bool:
+    def prune(self, node: ASTNode) -> bool:
         """A function used to prune the tree during transformation.
 
         Must returns whether the given node should prevent further traversal (see `ASTNode.dfs`).
@@ -1868,12 +1830,12 @@ class ASTTransformer(ABC):
         Default implementation returns False, meaning that the tree will be fully traversed.
 
         Args:
-            node_info (NodeTraversalInfo): The current node info being transformed.
+            node (ASTNode): The current node being transformed.
 
         """
         return False
 
-    def filter(self, node_info: NodeTraversalInfo) -> bool:
+    def filter(self, node: ASTNode) -> bool:
         """A function used to filter the tree during transformation.
 
         Must returns whether the given node should be transformed (see `ASTNode.dfs`).
@@ -1881,17 +1843,17 @@ class ASTTransformer(ABC):
         Default implementation returns True, meaning that all nodes will be transformed.
 
         Args:
-            node_info (NodeTraversalInfo): The current node info being considered for transformation.
+            node (ASTNode): The current node being considered for transformation.
 
         """
         return True
 
     @abstractmethod
-    def transform(self, node_info: NodeTraversalInfo) -> ASTNode | None:
+    def transform(self, node: ASTNode) -> ASTNode | None:
         """The main function implementing the transformation logic.
 
         Args:
-            node_info (NodeTraversalInfo): The node info to transform.
+            node (ASTNode): The node to transform.
 
         Returns:
             ASTNode: A new transformed node or the original node.
@@ -1920,24 +1882,22 @@ class ASTTransformer(ABC):
         for child in node.dfs(bottom_up=True, filter=self.filter, prune=self.prune):
             new_node = self.transform(child)
 
-            if child.node is node:
+            if child is node:
                 # We hit the root node, return the transformed node
                 return new_node
 
-            if new_node is not child.node:
+            if new_node is not child:
                 # Means that the node was transformed
                 if (
                     new_node is None
                     or new_node.id
-                    != child.node.id  # means the new node wasn't created using ASTNode.replace() which would retain the ID
+                    != child.id  # means the new node wasn't created using ASTNode.replace() which would retain the ID
                 ):
                     # try to replace the node
                     try:
-                        child.node.replace_with(new_node)
+                        child.replace_with(new_node)
                     except Exception as e:
-                        raise ASTTransformError(
-                            orig_node=child.node, transformed_node=new_node
-                        ) from e
+                        raise ASTTransformError(orig_node=child, transformed_node=new_node) from e
 
         # Means that this node was pruned
         return node

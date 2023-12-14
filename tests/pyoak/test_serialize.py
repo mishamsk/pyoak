@@ -248,18 +248,3 @@ def test_msgpack_serialize_funcs() -> None:
 
     assert hasattr(SerializeTestClass, "from_msgpck")
     assert hasattr(SerializeTestClass, "to_msgpck")
-
-
-@pytest.mark.dep_all
-def test_all_serialize_funcs() -> None:
-    pytest.importorskip("ruamel.yaml")
-    pytest.importorskip("msgpack")
-    pytest.importorskip("orjson")
-
-    assert hasattr(SerializeTestClass, "from_yaml")
-    assert hasattr(SerializeTestClass, "to_yaml")
-    assert hasattr(SerializeTestClass, "from_msgpck")
-    assert hasattr(SerializeTestClass, "to_msgpck")
-    assert hasattr(SerializeTestClass, "from_json")
-    assert hasattr(SerializeTestClass, "to_json")
-    assert hasattr(SerializeTestClass, "to_jsonb")

@@ -51,27 +51,16 @@ def test_init() -> None:
     assert "Incorrect xpath definition" in str(excinfo.value)
 
 
-def test_match_checks() -> None:
-    n = XpathNested("test", origin=origin)
-    other_n = XpathNested("test", origin=origin)
-
-    # Test node matching not belonging to the tree
-    with pytest.raises(ValueError) as excinfo:
-        ASTXpath("//XpathNested").match(n, other_n)
-
-    assert "The node is not in the tree" in str(excinfo.value)
-
-
 def test_xpath_match() -> None:
     n = XpathNested("test", origin=origin)
     m1 = XpathMiddle(n, origin=origin)
     n2 = XpathNestedSub("test2", origin=origin)
     m2 = XpathMiddle(n2, origin=origin)
     mm = XpathMiddle(m1, origin=origin)
-    r = XpathRoot((mm, m2), origin=origin)
-    r_tree = r.to_tree()
+    _ = XpathRoot((mm, m2), origin=origin)
+
     # Shape of the tree:
-    # XpathRoot (r)
+    # XpathRoot
     #   XpathMiddle (mm)
     #     XpathMiddle (m1)
     #       XpathNested (n)
@@ -79,44 +68,40 @@ def test_xpath_match() -> None:
     #     XpathNestedSub (n2)
 
     xpath = ASTXpath("//XpathNested")
-    assert xpath.match(r_tree, n2)
-    assert xpath.match(r_tree, n)
-
-    # Also one test from root node instead of tree
-    assert xpath.match(r, n2)
-    assert xpath.match(r, n)
+    assert xpath.match(n2)
+    assert xpath.match(n)
 
     xpath = ASTXpath("/XpathRoot/XpathMiddle/XpathNested")
-    assert xpath.match(r_tree, n2)
-    assert not xpath.match(r_tree, n)
+    assert xpath.match(n2)
+    assert not xpath.match(n)
 
     xpath = ASTXpath("/XpathRoot//XpathNested")
-    assert xpath.match(r_tree, n2)
-    assert xpath.match(r_tree, n)
+    assert xpath.match(n2)
+    assert xpath.match(n)
 
     xpath = ASTXpath("/XpathRoot/[0]XpathMiddle//XpathNested")
-    assert not xpath.match(r_tree, n2)
-    assert xpath.match(r_tree, n)
+    assert not xpath.match(n2)
+    assert xpath.match(n)
 
     xpath = ASTXpath("/XpathRoot/[]XpathMiddle//XpathNested")
-    assert xpath.match(r_tree, n2)
-    assert xpath.match(r_tree, n)
+    assert xpath.match(n2)
+    assert xpath.match(n)
 
     xpath = ASTXpath("//@middle_tuple/@nested[]XpathNested")
-    assert xpath.match(r_tree, n2)
-    assert not xpath.match(r_tree, n)
+    assert xpath.match(n2)
+    assert not xpath.match(n)
 
     xpath = ASTXpath("@middle_tuple/@nested[]XpathNested")
-    assert xpath.match(r_tree, n2)
-    assert not xpath.match(r_tree, n)
+    assert xpath.match(n2)
+    assert not xpath.match(n)
 
     xpath = ASTXpath("//@middle_tuple/XpathMiddle/@nested[]XpathNested")
-    assert not xpath.match(r_tree, n2)
-    assert xpath.match(r_tree, n)
+    assert not xpath.match(n2)
+    assert xpath.match(n)
 
     xpath = ASTXpath("@middle_tuple/XpathMiddle/@nested[]XpathNested")
-    assert not xpath.match(r_tree, n2)
-    assert xpath.match(r_tree, n)
+    assert not xpath.match(n2)
+    assert xpath.match(n)
 
 
 def test_xpath_find() -> None:
@@ -136,28 +121,28 @@ def test_xpath_find() -> None:
     #     XpathNestedSub (n2)
 
     xpath = ASTXpath("//XpathNested")
-    assert set(xpath.findall(r)) == {n2, n}
+    assert set(node.id for node in xpath.findall(r)) == {n.id, n2.id}
 
     xpath = ASTXpath("/XpathRoot/XpathMiddle/XpathNested")
-    assert set(xpath.findall(r)) == {n2}
+    assert set(node.id for node in xpath.findall(r)) == {n2.id}
 
     xpath = ASTXpath("/XpathRoot//XpathNested")
-    assert set(xpath.findall(r)) == {n2, n}
+    assert set(node.id for node in xpath.findall(r)) == {n.id, n2.id}
 
     xpath = ASTXpath("/XpathRoot/[0]XpathMiddle//XpathNested")
-    assert set(xpath.findall(r)) == {n}
+    assert set(node.id for node in xpath.findall(r)) == {n.id}
 
     xpath = ASTXpath("/XpathRoot/[]XpathMiddle//XpathNested")
-    assert set(xpath.findall(r)) == {n2, n}
+    assert set(node.id for node in xpath.findall(r)) == {n.id, n2.id}
 
     xpath = ASTXpath("//@middle_tuple/@nested[]XpathNested")
-    assert set(xpath.findall(r)) == {n2}
+    assert set(node.id for node in xpath.findall(r)) == {n2.id}
 
     xpath = ASTXpath("@middle_tuple/@nested[]XpathNested")
-    assert set(xpath.findall(r)) == {n2}
+    assert set(node.id for node in xpath.findall(r)) == {n2.id}
 
     xpath = ASTXpath("//@middle_tuple/XpathMiddle/@nested[]XpathNested")
-    assert set(xpath.findall(r)) == {n}
+    assert set(node.id for node in xpath.findall(r)) == {n.id}
 
     xpath = ASTXpath("@middle_tuple/XpathMiddle/@nested[]XpathNested")
-    assert set(xpath.findall(r)) == {n}
+    assert set(node.id for node in xpath.findall(r)) == {n.id}

@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 import pytest
 from pyoak.error import ASTTransformError
-from pyoak.node import ASTNode, ASTTransformer, ASTTransformVisitor, NodeTraversalInfo
+from pyoak.node import ASTNode, ASTTransformer, ASTTransformVisitor
 from pyoak.origin import NoOrigin
 
 
@@ -90,7 +90,7 @@ def test_transform_visitor() -> None:
     new_root = TRVisitor().transform(orig_root)
 
     # Check that the original tree is fully detached
-    assert all(node.node.detached for node in orig_root.dfs())
+    assert all(node.detached for node in orig_root.dfs())
 
     assert new_root is not orig_root
     assert isinstance(new_root, TRRootNode)
@@ -194,7 +194,7 @@ def test_transform_visitor_error_recovery() -> None:
 
     # Make sure the original tree is not modified
     assert orig_root.is_attached_root
-    assert all(not n.node.detached for n in orig_root.dfs())
+    assert all(not n.detached for n in orig_root.dfs())
     assert orig_root.child is parent1
     assert parent1.attr == "parent1"
     assert orig_root.child.child_nodes[0] is child_remove1
@@ -218,18 +218,18 @@ def test_transform_visitor_error_recovery() -> None:
 
 def test_transformer() -> None:
     class TRTransformer(ASTTransformer):
-        def filter(self, node_info: NodeTraversalInfo) -> bool:
-            return isinstance(node_info.node, TRChildNode) and node_info.node.what in (
+        def filter(self, node: ASTNode) -> bool:
+            return isinstance(node, TRChildNode) and node.what in (
                 "transform",
                 "remove",
             )
 
-        def transform(self, node_info: NodeTraversalInfo) -> ASTNode | None:
-            assert isinstance(node_info.node, TRChildNode)
+        def transform(self, node: ASTNode) -> ASTNode | None:
+            assert isinstance(node, TRChildNode)
 
-            if node_info.node.what == "transform":
-                return node_info.node.replace(attr="changed " + node_info.node.attr)
-            elif node_info.node.what == "remove":
+            if node.what == "transform":
+                return node.replace(attr="changed " + node.attr)
+            elif node.what == "remove":
                 return None
             else:
                 raise AssertionError("Invalid node.what")

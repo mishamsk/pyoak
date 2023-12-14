@@ -414,26 +414,34 @@ class ZippedFileSource(FileSource):
         return f"{self.relative_path.as_posix()}{URI_DELIM}{self.in_zip_path.as_posix()}"
 
 
+# sentinel value for when a file cannot be read
+class FailedReadFile(str):
+    pass
+
+
+_FAILED_READ_FILE = FailedReadFile()
+
+
 @dataclass(frozen=True)
 class TextFileSource(FileSource, TextSource):
     """Represents a text file source."""
 
-    def _load_raw(self, reader: t.Callable[[Path], str | None] | None = None) -> None:
+    _raw: str | None = field(default=None, compare=False, repr=False, kw_only=True)
+
+    def _load_raw(self) -> None:
         if self.relative_path.exists() and self.relative_path.is_file():
             try:
-                object.__setattr__(
-                    self,
-                    "_raw",
-                    reader(self.relative_path)
-                    if reader is not None
-                    else self.relative_path.read_text(),
-                )
+                object.__setattr__(self, "_raw", self.relative_path.read_text(encoding="utf-8"))
             except Exception:
                 logger.exception(f"Failed to read file {self.relative_path}")
+                object.__setattr__(self, "_raw", _FAILED_READ_FILE)
 
-    def get_raw(self, reader: t.Callable[[Path], str | None] | None = None) -> str | None:
+    def get_raw(self) -> str | None:
         if self._raw is None:
-            self._load_raw(reader)
+            self._load_raw()
+
+        if self._raw is _FAILED_READ_FILE:
+            return None
 
         return self._raw
 
@@ -687,12 +695,9 @@ class CodeOrigin(Origin):
     source: Source
     position: CodeRange
 
-    def get_raw(self, reader: t.Callable[[Path], str | None] | None = None) -> str | None:
+    def get_raw(self) -> str | None:
         """Returns the code chunk inside this range."""
-        if isinstance(self.source, TextFileSource):
-            code = self.source.get_raw(reader)
-        else:
-            code = self.source.get_raw()
+        code = self.source.get_raw()
 
         if not isinstance(code, str):
             return None
@@ -720,7 +725,7 @@ class GeneratedCodeOrigin(CodeOrigin):
     source: Source
     position: CodeRange = field(default=EMPTY_CODE_RANGE, init=False)
 
-    def get_raw(self, reader: t.Any | None = None) -> None:
+    def get_raw(self) -> None:
         return None
 
 

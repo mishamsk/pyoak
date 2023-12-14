@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from pyoak.node import ASTNode
@@ -46,6 +46,19 @@ class ASTNodeRegistryCollisionError(ASTNodeError):
         self.existing_node = existing_node
         self.new_node = new_node
         self.operation = operation
+
+
+class ASTNodeIDCollisionError(ASTNodeError):
+    """Raised when an ASTNode ID collision occurs."""
+
+    def __init__(self, existing_node: ASTNode, new_node_class: type[ASTNode]) -> None:
+        super().__init__(
+            f"ID Collision with an existing node type <{existing_node.__class__.__name__}> from <{existing_node.origin.fqn}>. Please use {new_node_class.__name__}.replace() method",
+            existing_node,
+            new_node_class,
+        )
+        self.existing_node = existing_node
+        self.new_node_class = new_node_class
 
 
 class ASTNodeParentCollisionError(ASTNodeError):
@@ -144,13 +157,3 @@ class ASTTransformError(Exception):
         )
         self.orig_node = orig_node
         self.transformed_node = transformed_node
-
-
-class InvalidFieldAnnotations(ASTNodeError):
-    """Raised when an ASTNode has fields with mixed ASTNode subclasses and regular types or
-    unsupported child fileds types (e.g. mutable collections of ASTNode's)."""
-
-    def __init__(self, invalid_annotations: Sequence[tuple[str, str, type]]) -> None:
-        self.invalid_annotations = invalid_annotations
-        message = f"The following field annotations are not valid: {', '.join(f'{name} ({type_}): {reason}' for name, reason, type_ in invalid_annotations)}"
-        super().__init__(message, invalid_annotations)

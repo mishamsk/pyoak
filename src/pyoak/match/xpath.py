@@ -7,12 +7,11 @@ from typing import Generator, NamedTuple, Type, cast
 from lark import Lark, UnexpectedInput
 from lark.visitors import Transformer
 
+from pyoak.node import ASTNode
+
 from ..match.error import ASTXpathDefinitionError
 from ..match.helpers import check_and_get_ast_node_type
-from ..node import ASTNode, NodeTraversalInfo
 from ..origin import NO_ORIGIN
-from ..tree import Tree
-from ..typing import Field
 
 xpath_grammar = """
 xpath: element* self
@@ -131,40 +130,26 @@ xpath_parser = Lark(
 )
 
 
-# Relax version of NodeTraversalInfo allowing root nodes
-class _NodeTraversalInfo(NamedTuple):
-    node: ASTNode
-    parent: ASTNode | None
-    field: Field | None
-    findex: int | None
-
-
-def _match_node_element(
-    n_info: _NodeTraversalInfo | NodeTraversalInfo, element: ASTXpathElement
-) -> bool:
+def _match_node_element(node: ASTNode, element: ASTXpathElement) -> bool:
     if (
-        isinstance(n_info.node, element.ast_class)
+        isinstance(node, element.ast_class)
         and (
             element.parent_field is None
-            or (n_info.field is not None and element.parent_field == n_info.field.name)
+            or (node.parent_field is not None and element.parent_field == node.parent_field.name)
         )
-        and (element.parent_index is None or element.parent_index == n_info.findex)
+        and (element.parent_index is None or element.parent_index == node.parent_index)
     ):
         return True
 
     return False
 
 
-def _match_node_xpath(tree: Tree, node: ASTNode, elements: list[ASTXpathElement]) -> bool:
+def _match_node_xpath(node: ASTNode, elements: list[ASTXpathElement]) -> bool:
     element = elements[0]
 
     # Ok, so we are somewhere in the middle (or start) of the search
     # First we need to match the current node to the current expected element
-    c_parent, c_parent_field, c_index = tree.get_parent_info(node)
-
-    if not _match_node_element(
-        _NodeTraversalInfo(node, c_parent, c_parent_field, c_index), element
-    ):
+    if not _match_node_element(node, element):
         return False
 
     # The current node matches the current element, so we need to go up the AST
@@ -176,22 +161,22 @@ def _match_node_xpath(tree: Tree, node: ASTNode, elements: list[ASTXpathElement]
         # - it was anywhere => we have a match
         # - it was not anywhere => we need to check if the node has no parent
         #   and if it doesn't then we have a match
-        return element.anywhere or c_parent is None
+        return element.anywhere or node.parent is None
 
     # Ok, so we have remaining elements to match
     # If no parent then no match
-    if c_parent is None:
+    if node.parent is None:
         return False
 
     # Otherwise we need to match the remaining elements to the parent
     if element.anywhere:
         # Anywhere means any ancestor can match
-        for ancestor in tree.get_ancestors(node):
-            if _match_node_xpath(tree, ancestor, tail):
+        for ancestor in node.ancestors():
+            if _match_node_xpath(ancestor, tail):
                 return True
     else:
         # Otherwise we need to match only the direct parent
-        return _match_node_xpath(tree, c_parent, tail)
+        return _match_node_xpath(node.parent, tail)
 
     # No match
     return False
@@ -237,15 +222,9 @@ class ASTXpath:
         except Exception as e:
             raise ASTXpathDefinitionError("Incorrect xpath definition") from e
 
-    def match(self, tree_or_root: ASTNode | Tree, node: ASTNode) -> bool:
-        """Match the `node` to the xpath in the `tree_or_root`."""
-        if not isinstance(tree_or_root, Tree):
-            tree_or_root = tree_or_root.to_tree()
-
-        if not tree_or_root.is_in_tree(node):
-            raise ValueError("The node is not in the tree")
-
-        return _match_node_xpath(tree_or_root, node, self._elements_reversed)
+    def match(self, node: ASTNode) -> bool:
+        """Match the `node` to the xpath."""
+        return _match_node_xpath(node, self._elements_reversed)
 
     def findall(self, root: ASTNode) -> Generator[ASTNode, None, None]:
         """Find all nodes in the `root` that match the xpath.
@@ -256,28 +235,21 @@ class ASTXpath:
         can be found in the LICENSE.txt file in the project root.
 
         """
-        # Using dict, because set is not ordered
-        work: dict[_NodeTraversalInfo | NodeTraversalInfo, None] = {
-            _NodeTraversalInfo(_DUMMY_XPATH_ROOT(root, origin=NO_ORIGIN), None, None, None): None
-        }
+        work: list[ASTNode] = [_DUMMY_XPATH_ROOT(root, origin=NO_ORIGIN)]
 
         for el in self._elements:
-            new_work: dict[_NodeTraversalInfo | NodeTraversalInfo, None] = {}
+            new_work: list[ASTNode] = []
 
-            for n_info in work:
+            for node in work:
                 if el.anywhere:
-                    for c_info in n_info.node.dfs():
-                        if _match_node_element(c_info, el):
-                            # Insert into our "ordered set" only if not already in there
-                            # this is to prefer first insertion order
-                            if c_info not in new_work:
-                                new_work[c_info] = None
+                    new_work.extend(
+                        [n for n in node.dfs(skip_self=True) if _match_node_element(n, el)]
+                    )
                 else:
-                    for c, f, i in n_info.node.get_child_nodes_with_field():
-                        c_info = NodeTraversalInfo(c, n_info.node, f, i)
-                        if _match_node_element(c_info, el):
-                            if c_info not in new_work:
-                                new_work[c_info] = None
+                    new_work.extend(
+                        [n for n in node.get_child_nodes() if _match_node_element(n, el)]
+                    )
+
             work = new_work
 
-        yield from [n_info.node for n_info in new_work.keys()]
+        yield from new_work
