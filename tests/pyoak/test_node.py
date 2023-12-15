@@ -14,6 +14,8 @@ from pyoak.error import (
     ASTNodeReplaceError,
     ASTNodeReplaceWithError,
 )
+from pyoak.match.error import ASTXpathDefinitionError
+from pyoak.match.xpath import ASTXpath
 from pyoak.node import (
     AST_SERIALIZE_DIALECT_KEY,
     ASTNode,
@@ -27,6 +29,11 @@ from pyoak.serialize import TYPE_KEY
 @dataclass
 class ChildNode(ASTNode):
     attr: str
+
+
+@dataclass
+class SubChildNode(ChildNode):
+    pass
 
 
 @dataclass
@@ -537,7 +544,7 @@ def test_replace() -> None:
     assert excinfo1.value.collided_child is another_parent.single_child
     assert excinfo1.value.collided_parent is another_parent
 
-    to_replace = HiddenNonCompareAttrNode("test", origin=origin)
+    to_replace = HiddenNonCompareAttrNode("test", "test", origin=origin)
     changes = dict(
         attr="good replacement",
         _hidden_attr="good replacement",
@@ -1054,7 +1061,10 @@ def test_ast_test_serialization_dialect() -> None:
     ParentNode.from_dict(serialized_dialect_dict)
 
 
+@pytest.mark.dep_msgpack
 def test_to_msgpack() -> None:
+    pytest.importorskip("msgpack")
+
     ch_nodes: list[ASTNode] = []
     ch_count = 10
     for i in range(ch_count):
@@ -1315,6 +1325,107 @@ def test_walkers() -> None:
     assert list(r.gather(Nested, extra_filter=lambda n: cast(Nested, n).attr != "test2")) == [n1]
 
     r.detach()
+
+
+def test_gather() -> None:
+    ch = ChildNode("1", origin=origin)
+    ch1 = ChildNode("1", origin=origin)
+    sub_ch = SubChildNode("1", origin=origin)
+    other = OtherNode("1", origin=origin)
+    other1 = OtherNode("1", origin=origin)
+
+    mid = ParentNode(
+        attr="Mid",
+        single_child=ch,
+        child_list=(sub_ch, other),
+        not_a_child_list=[],
+        origin=origin,
+    )
+
+    root = ParentNode(
+        attr="Root",
+        single_child=mid,
+        child_list=(ch1, other1),
+        not_a_child_list=[],
+        origin=origin,
+    )
+
+    assert set(node.id for node in root.gather(ChildNode)) == {ch.id, ch1.id, sub_ch.id}
+    assert set(node.id for node in list(root.gather((ChildNode, OtherNode)))) == {
+        ch.id,
+        ch1.id,
+        sub_ch.id,
+        other.id,
+        other1.id,
+    }
+
+
+def test_find() -> None:
+    ch = ChildNode("1", origin=origin)
+    ch1 = ChildNode("1", origin=origin)
+    sub_ch = SubChildNode("1", origin=origin)
+    other = OtherNode("1", origin=origin)
+    other1 = OtherNode("1", origin=origin)
+
+    mid = ParentNode(
+        attr="Mid",
+        single_child=ch,
+        child_list=(sub_ch, other),
+        not_a_child_list=[],
+        origin=origin,
+    )
+
+    root = ParentNode(
+        attr="Root",
+        single_child=mid,
+        child_list=(ch1, other1),
+        not_a_child_list=[],
+        origin=origin,
+    )
+
+    # Only minimal test. Full in test_xpath.py
+    assert root.find("//ChildNode") is ch
+    assert root.find(ASTXpath("//ChildNode")) is ch
+    assert root.find("/OtherNode") is None
+
+    with pytest.raises(ASTXpathDefinitionError):
+        root.find("NonExistentClass")
+
+
+def test_findall() -> None:
+    ch = ChildNode("1", origin=origin)
+    ch1 = ChildNode("1", origin=origin)
+    sub_ch = SubChildNode("1", origin=origin)
+    other = OtherNode("1", origin=origin)
+    other1 = OtherNode("1", origin=origin)
+
+    mid = ParentNode(
+        attr="Mid",
+        single_child=ch,
+        child_list=(sub_ch, other),
+        not_a_child_list=[],
+        origin=origin,
+    )
+
+    root = ParentNode(
+        attr="Root",
+        single_child=mid,
+        child_list=(ch1, other1),
+        not_a_child_list=[],
+        origin=origin,
+    )
+
+    # Only minimal test. Full in test_xpath.py
+    assert set(node.id for node in root.findall("//ChildNode")) == {ch.id, ch1.id, sub_ch.id}
+    assert set(node.id for node in root.findall(ASTXpath("//ChildNode"))) == {
+        ch.id,
+        ch1.id,
+        sub_ch.id,
+    }
+    assert len(list(root.findall("/OtherNode"))) == 0
+
+    with pytest.raises(ASTXpathDefinitionError):
+        next(root.findall("NonExistentClass"))
 
 
 class MiddleSubclass(Middle):

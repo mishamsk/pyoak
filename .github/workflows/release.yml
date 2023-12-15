@@ -20,16 +20,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-      - name: Install poetry
-        run: pipx install poetry==1.5.1
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-versions }}
 
+      - name: Install poetry
+        run: |
+          pip install poetry==1.5.1
+          poetry config virtualenvs.in-project true
+
       - name: Install dependencies
         run: |
-          poetry install --only dev
+          poetry install --only dev --no-root
 
       - name: test with tox
         run: poetry run tox
@@ -42,13 +45,15 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Install poetry
-        run: pipx install poetry==1.5.1
-
       - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
           python-version: "3.11"
+
+      - name: Install poetry
+        run: |
+          pip install poetry==1.5.1
+          poetry config virtualenvs.in-project true
 
       - name: Build wheels and source tarball
         run: |

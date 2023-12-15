@@ -135,6 +135,9 @@ def test_text_file_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     test_file_rel_path.write_text("Test", encoding="windows-1252")
     assert s.get_raw() == "Test"
 
+    # test pass _raw
+    assert TextFileSource(test_file_rel_path, _raw="init_raw").get_raw() == "init_raw"
+
     serialized = s.to_json()
     # _raw should not be serialized
     assert "_raw" not in serialized

@@ -136,3 +136,6 @@ drop_db.sh
 
 # vscode
 .vscode
+
+# poetry
+poetry.lock

@@ -194,7 +194,7 @@ def test_transform_visitor_error_recovery() -> None:
 
     # Make sure the original tree is not modified
     assert orig_root.is_attached_root
-    assert all(not n.detached for n in orig_root.dfs(skip_self=True))
+    assert all(not n.detached for n in orig_root.dfs())
     assert orig_root.child is parent1
     assert parent1.attr == "parent1"
     assert orig_root.child.child_nodes[0] is child_remove1

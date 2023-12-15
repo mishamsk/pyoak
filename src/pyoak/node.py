@@ -3,7 +3,6 @@ from __future__ import annotations
 import enum
 import hashlib
 import logging
-import typing as t
 import weakref
 from abc import ABC, abstractmethod
 from collections import deque
@@ -12,6 +11,20 @@ from dataclasses import Field as DataClassField
 from dataclasses import InitVar, dataclass, field, fields, replace
 from inspect import getmembers, getmro, isfunction
 from operator import itemgetter
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    ClassVar,
+    Deque,
+    Generic,
+    Iterator,
+    Literal,
+    Mapping,
+    Sequence,
+    TypeVar,
+    cast,
+)
 
 from rich.markup import escape
 from rich.tree import Tree
@@ -29,19 +42,23 @@ from .helpers import ChildFieldTypeInfo, get_ast_node_child_fields, get_ast_node
 from .origin import Origin
 from .serialize import TYPE_KEY, DataClassSerializeMixin
 
+if TYPE_CHECKING:
+    from .match.xpath import ASTXpath
+
 logger = logging.getLogger(__name__)
 
 TRACE_LOGGING = False
 
 # to make mypy happy
-Field = DataClassField[t.Any]
+Field = DataClassField[Any]
 
-VisitorReturnType = t.TypeVar("VisitorReturnType")
+VisitorReturnType = TypeVar("VisitorReturnType")
 
 ChildIndex = int
 
 UNSET_ID = "~~~UNSET~~~"  # Hopefully no one will ever use this as an ID
 CONTENT_ID_FIELD = "_content_id"
+
 
 # Hack to make dataclasses InitVar work with future annotations
 # See https://stackoverflow.com/questions/70400639/how-do-i-get-python-dataclass-initvar-fields-to-work-with-typing-get-type-hints
@@ -144,10 +161,10 @@ class ASTNode(DataClassSerializeMixin):
 
     """
 
-    _nodes: t.ClassVar[weakref.WeakValueDictionary[str, ASTNode]] = weakref.WeakValueDictionary()
+    _nodes: ClassVar[weakref.WeakValueDictionary[str, ASTNode]] = weakref.WeakValueDictionary()
     """Registry of all node objects that are considered "attached"."""
 
-    _props: t.ClassVar[t.Mapping[str, tuple[Field, t.Type[t.Any]]] | None] = None
+    _props: ClassVar[Mapping[str, tuple[Field, type[Any]]] | None] = None
     """Mapping of field names to field instances & resolved types that are considered properties
     (i.e. not children). This mapping is determined statically at based only on field type
     annotations.
@@ -156,7 +173,7 @@ class ASTNode(DataClassSerializeMixin):
 
     """
 
-    _child_fields: t.ClassVar[t.Mapping[str, tuple[Field, ChildFieldTypeInfo]] | None] = None
+    _child_fields: ClassVar[Mapping[str, tuple[Field, ChildFieldTypeInfo]] | None] = None
     """"Mapping of field names to field instances & resolved types that are considered children.
     This mapping is determined statically at based only on field type annotations.
 
@@ -368,7 +385,7 @@ class ASTNode(DataClassSerializeMixin):
         object.__setattr__(self, "_parent_field", field)
         object.__setattr__(self, "_parent_index", index)
 
-    def __post_serialize__(self, d: dict[str, t.Any]) -> dict[str, t.Any]:
+    def __post_serialize__(self, d: dict[str, Any]) -> dict[str, Any]:
         # Run first, otherwise _children will be dropped from the output
         out = super().__post_serialize__(d)
 
@@ -448,7 +465,7 @@ class ASTNode(DataClassSerializeMixin):
             seen.add(c.id)
 
     def _attach_inner(
-        self, operation: t.Literal["create", "attach", "replace"]
+        self, operation: Literal["create", "attach", "replace"]
     ) -> tuple[ASTNode, ASTNode] | None:
         """Assigns parent to all child nodes, checking that they don't have a different parent that
         is also in the registry (aka attached node).
@@ -494,7 +511,7 @@ class ASTNode(DataClassSerializeMixin):
 
         return None
 
-    def _attach(self, operation: t.Literal["create", "attach", "replace"]) -> None:
+    def _attach(self, operation: Literal["create", "attach", "replace"]) -> None:
         if (ret := self._attach_inner(operation=operation)) is not None:
             c, p = ret
             raise ASTNodeParentCollisionError(self, c, p)
@@ -534,8 +551,8 @@ class ASTNode(DataClassSerializeMixin):
                 )
 
                 # Now shift all the indexes of the children after the removed one
-                for c in t.cast(t.Iterable[ASTNode], orig_seq[index + 1 :]):
-                    c._set_parent(self, field, t.cast(int, c.parent_index) - 1)
+                for c in cast(Iterable[ASTNode], orig_seq[index + 1 :]):
+                    c._set_parent(self, field, cast(int, c.parent_index) - 1)
         else:
             # This means the old node was a child in a field
             setattr(self, field.name, new)
@@ -551,7 +568,7 @@ class ASTNode(DataClassSerializeMixin):
 
     @classmethod
     def get(
-        cls: t.Type[ASTNodeType],
+        cls: type[ASTNodeType],
         id: str,
         default: ASTNodeType | None = None,
         strict: bool = True,
@@ -577,7 +594,7 @@ class ASTNode(DataClassSerializeMixin):
         elif not strict and not isinstance(ret, cls):
             return None
         else:
-            return t.cast(ASTNodeType, ret)
+            return cast(ASTNodeType, ret)
 
     @classmethod
     def get_any(cls, id: str, default: ASTNode | None = None) -> ASTNode | None:
@@ -660,7 +677,7 @@ class ASTNode(DataClassSerializeMixin):
         """
         return self.detach(only_self=True)
 
-    def replace(self: ASTNodeType, **changes: t.Any) -> ASTNodeType:
+    def replace(self: ASTNodeType, **changes: Any) -> ASTNodeType:
         """This will create and return a new node with changes applied to it.
 
         if the node was attached to the registry, it will be replaced in the
@@ -930,7 +947,7 @@ class ASTNode(DataClassSerializeMixin):
         """Creates a new node with the same data as this node but a unique new id."""
         logger.debug(f"Duplicating an existing AST Node <{self.id}>")
 
-        changes: dict[str, t.Any] = {}
+        changes: dict[str, Any] = {}
         for obj, f in self._iter_child_fields():
             if isinstance(obj, ASTNode):
                 changes[f.name] = obj.duplicate(as_detached_clone=as_detached_clone)
@@ -987,7 +1004,7 @@ class ASTNode(DataClassSerializeMixin):
         return True
 
     @property
-    def children(self) -> t.List[ASTNode]:
+    def children(self) -> Sequence[ASTNode]:
         """Returns a static list with all child ASTNodes.
 
         Use `get_child_nodes` to iterate over
@@ -1042,7 +1059,7 @@ class ASTNode(DataClassSerializeMixin):
         """
         # Since we are dynamically assigning the parent fields
         # we need to use getattr to make typing happy
-        return t.cast(str | None, getattr(self, "_xpath", None))
+        return cast(str | None, getattr(self, "_xpath", None))
 
     @property
     def detached(self) -> bool:
@@ -1130,7 +1147,7 @@ class ASTNode(DataClassSerializeMixin):
         else:
             return self.parent.get_depth(relative_to=relative_to, check_ancestor=False) + 1
 
-    def ancestors(self) -> t.Iterator[ASTNode]:
+    def ancestors(self) -> Iterator[ASTNode]:
         """Iterates over all ancestors of this node."""
         parent = self.parent
         while parent is not None:
@@ -1139,7 +1156,7 @@ class ASTNode(DataClassSerializeMixin):
 
     def get_first_ancestor_of_type(
         self,
-        ancestor_class: t.Type[ASTNodeType] | tuple[t.Type[ASTNodeType], ...],
+        ancestor_class: type[ASTNodeType] | tuple[type[ASTNodeType], ...],
         *,
         exact_type: bool = False,
     ) -> ASTNodeType | None:
@@ -1147,7 +1164,7 @@ class ASTNode(DataClassSerializeMixin):
         if no such ancestor exists.
 
         Args:
-            ancestor_class (t.Type[ASTNodeType] | tuple[t.Type[ASTNodeType], ...]): The
+            ancestor_class (type[ASTNodeType] | tuple[type[ASTNodeType], ...]): The
                 ancestor class or tuple of classes to search for.
             exact_type (bool, optional): Whether to search for exact type match,
                 or match any subclasses (isintance check). Defaults to False.
@@ -1157,16 +1174,16 @@ class ASTNode(DataClassSerializeMixin):
 
         """
         if not isinstance(ancestor_class, tuple):
-            ancestor_classes = t.cast(tuple[t.Type[ASTNodeType], ...], (ancestor_class,))
+            ancestor_classes = cast(tuple[type[ASTNodeType], ...], (ancestor_class,))
         else:
             ancestor_classes = ancestor_class
 
         for ancestor in self.ancestors():
             if exact_type and type(ancestor) in ancestor_classes:
-                return t.cast(ASTNodeType, ancestor)
+                return cast(ASTNodeType, ancestor)
 
             if not exact_type and isinstance(ancestor, ancestor_classes):
-                return t.cast(ASTNodeType, ancestor)
+                return ancestor
 
         return None
 
@@ -1179,7 +1196,7 @@ class ASTNode(DataClassSerializeMixin):
         else:
             return self.is_ancestor(node.parent)
 
-    def is_equal(self, other: t.Any) -> bool:
+    def is_equal(self, other: Any) -> bool:
         """Returns True if this node is equal to `other`.
 
         Unlike `==`, this method only compares properties & children and ignores the origin, id,
@@ -1191,7 +1208,7 @@ class ASTNode(DataClassSerializeMixin):
 
         return self.content_id == other.content_id
 
-    def to_properties_dict(self) -> dict[str, t.Any]:
+    def to_properties_dict(self) -> dict[str, Any]:
         """Returns a dictionary of all node properties (not children), including only "content",
         i.e. origin, id, origin_id, id_collision, parent_id and hidden attributes are not
         included."""
@@ -1202,7 +1219,7 @@ class ASTNode(DataClassSerializeMixin):
 
         return d
 
-    def _ensure_iterable(self, value: t.Any | None) -> t.Iterable[t.Any]:
+    def _ensure_iterable(self, value: Any | None) -> Iterable[Any]:
         if value is None:
             return []
         if isinstance(value, (list, tuple)):
@@ -1232,7 +1249,7 @@ class ASTNode(DataClassSerializeMixin):
 
     def _iter_child_fields(
         self,
-    ) -> t.Iterable[tuple[ASTNode | t.Sequence[ASTNode] | None, Field]]:
+    ) -> Iterable[tuple[ASTNode | Sequence[ASTNode] | None, Field]]:
         for f in fields(self):
             # Skip non-child fields
             if not self._is_field_child(f):
@@ -1242,8 +1259,8 @@ class ASTNode(DataClassSerializeMixin):
 
     def dfs(
         self,
-        prune: t.Callable[[ASTNode], bool] | None = None,
-        filter: t.Callable[[ASTNode], bool] | None = None,
+        prune: Callable[[ASTNode], bool] | None = None,
+        filter: Callable[[ASTNode], bool] | None = None,
         bottom_up: bool = False,
         skip_self: bool = False,
     ) -> Generator[ASTNode, None, None]:
@@ -1251,8 +1268,8 @@ class ASTNode(DataClassSerializeMixin):
         order.
 
         Args:
-            prune (t.Callable[[ASTNode], bool] | None, optional): An optional function which if it returns True will prevent further decent into the children of this element.
-            filter (t.Callable[[ASTNode], bool] | None, optional): An optional function which if it returns False will prevent the element from being yielded, but won't interrupt the recursive decent/ascent.
+            prune (Callable[[ASTNode], bool] | None, optional): An optional function which if it returns True will prevent further decent into the children of this element.
+            filter (Callable[[ASTNode], bool] | None, optional): An optional function which if it returns False will prevent the element from being yielded, but won't interrupt the recursive decent/ascent.
             bottom_up (bool, optional): Enables bottom up traversal. Defaults to False.
             skip_self (bool, optional): Doesn't yield self. Defaults to False.
 
@@ -1260,8 +1277,8 @@ class ASTNode(DataClassSerializeMixin):
             Generator[ASTNode, None, None]: A generator object which visits all nodes in this tree in the DFS (Depth-first) order.
 
         """
-        build_queue: t.Deque[ASTNode] = deque([self])
-        yield_queue: t.Deque[ASTNode] = deque()
+        build_queue: Deque[ASTNode] = deque([self])
+        yield_queue: Deque[ASTNode] = deque()
 
         while build_queue:
             child = build_queue.popleft()
@@ -1291,22 +1308,22 @@ class ASTNode(DataClassSerializeMixin):
 
     def bfs(
         self,
-        prune: t.Callable[[ASTNode], bool] | None = None,
-        filter: t.Callable[[ASTNode], bool] | None = None,
+        prune: Callable[[ASTNode], bool] | None = None,
+        filter: Callable[[ASTNode], bool] | None = None,
         skip_self: bool = False,
     ) -> Generator[ASTNode, None, None]:
         """Returns a generator object which visits all nodes in this tree in the BFS (Breadth-first)
         order.
 
         Args:
-            prune (t.Callable[[ASTNode], bool]): An optional function which if it returns True will prevent further decent into the children of this element.
-            filter (t.Callable[[ASTNode], bool]): An optional function which if it returns False will prevent the element from being yielded, but won't interrupt the recursive decent.
+            prune (Callable[[ASTNode], bool]): An optional function which if it returns True will prevent further decent into the children of this element.
+            filter (Callable[[ASTNode], bool]): An optional function which if it returns False will prevent the element from being yielded, but won't interrupt the recursive decent.
 
         Returns:
             the generator object.
 
         """
-        queue: t.Deque[ASTNode] = deque([self])
+        queue: Deque[ASTNode] = deque([self])
 
         while queue:
             child = queue.popleft()
@@ -1325,28 +1342,28 @@ class ASTNode(DataClassSerializeMixin):
 
     def gather(
         self,
-        obj_class: t.Type[ASTNodeType] | tuple[t.Type[ASTNodeType], ...],
+        obj_class: type[ASTNodeType] | tuple[type[ASTNodeType], ...],
         *,
         exact_type: bool = False,
-        extra_filter: t.Callable[[ASTNode], bool] | None = None,
-        prune: t.Callable[[ASTNode], bool] | None = None,
+        extra_filter: Callable[[ASTNode], bool] | None = None,
+        prune: Callable[[ASTNode], bool] | None = None,
         skip_self: bool = False,
     ) -> Generator[ASTNodeType, None, None]:
         """Shorthand for traversing the tree and gathering all instances of subclasses of
         `obj_class` or exactly `obj_class` if `exact_type` is True.
 
         Args:
-            obj_class (t.Type[ASTNodeType] | tuple[t.Type[ASTNodeType], ...]): any ASTNode subclass or Tuple of classes to gather.
+            obj_class (type[ASTNodeType] | tuple[type[ASTNodeType], ...]): any ASTNode subclass or Tuple of classes to gather.
             exact_type (bool, optional): Whether to only gather instances of `obj_class` and not its subclasses. Defaults to False.
-            extra_filter (t.Callable[[ASTNode], bool] | None, optional): An optional additional filter to apply when gathering. Defaults to None.
-            prune (t.Callable[[ASTNode], bool] | None, optional): Optional function to stop traversal. Defaults to None.
+            extra_filter (Callable[[ASTNode], bool] | None, optional): An optional additional filter to apply when gathering. Defaults to None.
+            prune (Callable[[ASTNode], bool] | None, optional): Optional function to stop traversal. Defaults to None.
             skip_self (bool, optional): Whether to skip the node that this method is called from. Defaults to False.
 
         Yields:
             Generator[ASTNodeType, None, None]: An iterator of `obj_class` instances.
 
         """
-        obj_classes: tuple[t.Type[ASTNodeType], ...]
+        obj_classes: tuple[type[ASTNodeType], ...]
         if not isinstance(obj_class, tuple):
             obj_classes = (obj_class,)
         else:
@@ -1363,7 +1380,50 @@ class ASTNode(DataClassSerializeMixin):
                 return type(obj) in obj_classes and (extra_filter is None or extra_filter(obj))
 
         for elem in self.dfs(prune=prune, filter=filter_fn, bottom_up=False, skip_self=skip_self):
-            yield t.cast(ASTNodeType, elem)
+            yield cast(ASTNodeType, elem)
+
+    def find(self, xpath: str | ASTXpath) -> ASTNode | None:
+        """Finds a node by xpath.
+
+        Args:
+            xpath (str | ASTXpath): The xpath to find.
+
+        Returns:
+            ASTNode | None: The node if found, otherwise None.
+
+        Raises:
+            ASTXpathDefinitionError: If the xpath is invalid.
+
+        """
+        from .match.xpath import ASTXpath
+
+        if isinstance(xpath, str):
+            xpath = ASTXpath(xpath)
+
+        try:
+            return next(xpath.findall(self))
+        except StopIteration:
+            return None
+
+    def findall(self, xpath: str | ASTXpath) -> Generator[ASTNode, None, None]:
+        """Finds all nodes by xpath.
+
+        Args:
+            xpath (str | ASTXpath): The xpath to find.
+
+        Returns:
+            Generator[ASTNode, None, None]: An iterator of nodes.
+
+        Raises:
+            ASTXpathDefinitionError: If the xpath is invalid.
+
+        """
+        from .match.xpath import ASTXpath
+
+        if isinstance(xpath, str):
+            xpath = ASTXpath(xpath)
+
+        yield from xpath.findall(self)
 
     @classmethod
     def get_property_fields(
@@ -1374,7 +1434,7 @@ class ASTNode(DataClassSerializeMixin):
         skip_id_collision_with: bool = True,
         skip_hidden: bool = True,
         skip_non_compare: bool = False,
-    ) -> t.Iterable[tuple[str, Field]]:
+    ) -> Iterable[tuple[str, Field]]:
         """Returns an iterator of all properties (but not child attributes) of this node using
         static type information.
 
@@ -1387,7 +1447,7 @@ class ASTNode(DataClassSerializeMixin):
             skip_non_compare (bool, optional): Whether to skip properties that are not used in comparison (field.comapre is False). Defaults to False.
 
         Yields:
-            t.Iterable[tuple[str, Field]]: An iterator of tuples of (field name, field).
+            Iterable[tuple[str, Field]]: An iterator of tuples of (field name, field).
 
         """
         if cls._props is None:
@@ -1411,11 +1471,11 @@ class ASTNode(DataClassSerializeMixin):
     @classmethod
     def get_child_fields(
         cls,
-    ) -> t.Mapping[str, tuple[Field, ChildFieldTypeInfo]]:
+    ) -> Mapping[str, tuple[Field, ChildFieldTypeInfo]]:
         """Returns an iterator of all child attributes of this node using static type information.
 
         Returns:
-            t.Mapping[str, tuple[Field, ChildFieldTypeInfo]]:
+            Mapping[str, tuple[Field, ChildFieldTypeInfo]]:
                 A mapping of child attribute name to (field, type_info).
 
         """
@@ -1434,7 +1494,7 @@ class ASTNode(DataClassSerializeMixin):
         skip_id_collision_with: bool = True,
         skip_hidden: bool = True,
         skip_non_compare: bool = False,
-    ) -> t.Iterable[tuple[t.Any, Field]]:
+    ) -> Iterable[tuple[Any, Field]]:
         """Returns an iterator of all properties (but not child attributes) of this node.
 
         Args:
@@ -1446,7 +1506,7 @@ class ASTNode(DataClassSerializeMixin):
             skip_non_compare (bool, optional): Whether to skip properties that are not used in comparison (field.comapre is False). Defaults to False.
 
         Yields:
-            t.Iterable[tuple[t.Any, Field]]: An iterator of tuples of (value, field).
+            Iterable[tuple[Any, Field]]: An iterator of tuples of (value, field).
 
         """
         for f in fields(self):
@@ -1468,7 +1528,7 @@ class ASTNode(DataClassSerializeMixin):
 
             yield getattr(self, f.name), f
 
-    def get_child_nodes(self) -> t.Iterable[ASTNode]:
+    def get_child_nodes(self) -> Iterable[ASTNode]:
         """Returns a generator object which yields all child nodes."""
         for f in fields(self):
             # Skip non-child fields
@@ -1482,7 +1542,7 @@ class ASTNode(DataClassSerializeMixin):
 
     def get_child_nodes_with_field(
         self,
-    ) -> t.Iterable[tuple[ASTNode, Field, int | None]]:
+    ) -> Iterable[tuple[ASTNode, Field, int | None]]:
         """Returns a generator object which yields all child nodes with their corresponding field
         and index (for lists and tuples)."""
         for f in fields(self):
@@ -1557,10 +1617,10 @@ class ASTNode(DataClassSerializeMixin):
         return super().__init_subclass__()
 
 
-ASTNodeType = t.TypeVar("ASTNodeType", bound=ASTNode)
+ASTNodeType = TypeVar("ASTNodeType", bound=ASTNode)
 
 
-class ASTVisitor(t.Generic[VisitorReturnType]):
+class ASTVisitor(Generic[VisitorReturnType]):
     """A visitor generic base class for an AST visitor.
 
     Args:
@@ -1641,7 +1701,7 @@ class ASTTransformVisitor(ASTVisitor[ASTNode | None]):
 
     def _transform_children(
         self, node: ASTNode
-    ) -> t.Mapping[str, ASTNode | None | list[ASTNode] | tuple[ASTNode, ...]]:
+    ) -> Mapping[str, ASTNode | None | list[ASTNode] | tuple[ASTNode, ...]]:
         """Transforms the children of a given node and returns a mapping of field names to changes.
 
         This mapping can be passed to ASTNode.replace method.
@@ -1687,12 +1747,12 @@ class ASTTransformVisitor(ASTVisitor[ASTNode | None]):
 
         # Ensure the correct sequence type for changed sequence fields
         for fname in field_names_with_changes:
-            _, type_info = t.cast(
+            _, type_info = cast(
                 tuple[Field, ChildFieldTypeInfo], node.get_child_fields().get(fname)
             )
 
             if type_info.sequence_type is not None:
-                changes[fname] = type_info.sequence_type(t.cast(list[ASTNode], changes[fname]))
+                changes[fname] = type_info.sequence_type(cast(list[ASTNode], changes[fname]))
 
         # Return the changes
         return changes

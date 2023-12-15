@@ -9,9 +9,6 @@ from pathlib import Path
 from typing import Any, ClassVar, Type, TypeVar, cast
 from uuid import UUID
 
-import msgpack
-import orjson
-import yaml
 from mashumaro.config import ADD_DIALECT_SUPPORT, BaseConfig
 from mashumaro.dialect import Dialect
 from mashumaro.exceptions import InvalidFieldValue
@@ -19,18 +16,104 @@ from mashumaro.helper import pass_through
 from mashumaro.mixins.dict import DataClassDictMixin
 from mashumaro.types import SerializableType
 
+_HAS_MSGPACK = False
+try:
+    import msgpack
+
+    _HAS_MSGPACK = True
+except ImportError:
+    pass
+
+json_dialect: Type[Dialect] | None = None
+try:
+    import orjson
+
+    def json_loader(value: bytes | str) -> dict[str, Any]:
+        return cast(dict[str, Any], orjson.loads(value))
+
+    def json_dumper_to_byte(value: dict[str, Any], indent: bool = False) -> bytes:
+        if indent:
+            return orjson.dumps(  # type: ignore
+                value,
+                option=orjson.OPT_INDENT_2,
+            )
+        else:
+            return orjson.dumps(value)  # type: ignore
+
+    def json_dumper_to_str(value: dict[str, Any], indent: bool = False) -> str:
+        if indent:
+            return orjson.dumps(  # type: ignore
+                value,
+                option=orjson.OPT_INDENT_2,
+            ).decode(encoding="utf-8")
+        else:
+            return orjson.dumps(value).decode(encoding="utf-8")  # type: ignore
+
+    class OrjsonDialect(Dialect):
+        serialization_strategy = {  # noqa: RUF012
+            datetime: {"serialize": pass_through},
+            date: {"serialize": pass_through},
+            time: {"serialize": pass_through},
+            UUID: {"serialize": pass_through},
+        }
+
+    json_dialect = OrjsonDialect
+except ImportError:
+    import json
+
+    def json_loader(value: bytes | str) -> dict[str, Any]:
+        return cast(dict[str, Any], json.loads(value))
+
+    def json_dumper_to_byte(value: dict[str, Any], indent: bool = False) -> bytes:
+        if indent:
+            return json.dumps(value, indent=2).encode(encoding="utf-8")
+        else:
+            return json.dumps(value).encode(encoding="utf-8")
+
+    def json_dumper_to_str(value: dict[str, Any], indent: bool = False) -> str:
+        if indent:
+            return json.dumps(value, indent=2)
+        else:
+            return json.dumps(value)
+
+
+_HAS_YAML = False
+try:
+    import ruamel.yaml
+    from ruamel.yaml.compat import StringIO
+
+    ruamel_yaml = ruamel.yaml.YAML(typ="rt", pure=False)
+
+    def yaml_dumper(value: dict[str, Any]) -> str:
+        stream = StringIO()
+        ruamel_yaml.dump(value, stream)
+        return stream.getvalue()  # type: ignore
+
+    def yaml_loader(value: bytes | str) -> dict[str, Any]:
+        return ruamel_yaml.load(value)  # type: ignore
+
+    _HAS_YAML = True
+except ImportError:
+    try:
+        import yaml
+
+        YamlLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+        YamlDumper = getattr(yaml, "CDumper", yaml.Dumper)
+
+        def yaml_dumper(value: dict[str, Any]) -> str:
+            return yaml.dump(value, Dumper=YamlDumper)
+
+        def yaml_loader(value: bytes | str) -> dict[str, Any]:
+            return yaml.load(value, Loader=YamlLoader)  # type: ignore
+
+        _HAS_YAML = True
+    except ImportError:
+        pass
+
+
 TYPES: dict[str, Type[DataClassSerializeMixin]] = {}
 
 T = TypeVar("T", bound="DataClassSerializeMixin")
-
-
-class OrjsonDialect(Dialect):
-    serialization_strategy = {  # noqa: RUF012
-        datetime: {"serialize": pass_through},
-        date: {"serialize": pass_through},
-        time: {"serialize": pass_through},
-        UUID: {"serialize": pass_through},
-    }
 
 
 class MessagePackDialect(Dialect):
@@ -41,10 +124,6 @@ class MessagePackDialect(Dialect):
             "serialize": pass_through,
         },
     }
-
-
-YamlLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
-YamlDumper = getattr(yaml, "CDumper", yaml.Dumper)
 
 
 @enum.unique
@@ -226,21 +305,13 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
             bytes: The serialized object.
 
         """
-        if indent:
-            return orjson.dumps(
-                self.as_dict(
-                    mashumaro_dialect=OrjsonDialect,
-                    serialization_options=serialization_options,
-                ),
-                option=orjson.OPT_INDENT_2,
-            )
-        else:
-            return orjson.dumps(
-                self.as_dict(
-                    mashumaro_dialect=OrjsonDialect,
-                    serialization_options=serialization_options,
-                )
-            )
+        return json_dumper_to_byte(
+            self.as_dict(
+                mashumaro_dialect=json_dialect,
+                serialization_options=serialization_options,
+            ),
+            indent=indent,
+        )
 
     def to_json(
         self,
@@ -261,8 +332,12 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
             str: The serialized object.
 
         """
-        return self.to_jsonb(indent=indent, serialization_options=serialization_options).decode(
-            encoding="utf-8"
+        return json_dumper_to_str(
+            self.as_dict(
+                mashumaro_dialect=json_dialect,
+                serialization_options=serialization_options,
+            ),
+            indent=indent,
         )
 
     @classmethod
@@ -286,114 +361,111 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
         """
 
         return cls.as_obj(
-            orjson.loads(value),
-            mashumaro_dialect=OrjsonDialect,
+            json_loader(value),
+            mashumaro_dialect=json_dialect,
             serialization_options=serialization_options,
         )
 
-    def to_msgpck(self, serialization_options: dict[str, Any] | None = None) -> bytes:
-        """Serialize this object to MessagePack (as bytes).
+    if _HAS_MSGPACK:
 
-        Mashumaro dialects are not supported for this method.
+        def to_msgpck(self, serialization_options: dict[str, Any] | None = None) -> bytes:
+            """Serialize this object to MessagePack (as bytes).
 
-        Args:
-            serialization_options (dict[str, Any], optional): Additional options that may be accessed by subclasses
-        for customization.
+            Mashumaro dialects are not supported for this method.
 
-        Returns:
-            bytes: The serialized object.
+            Args:
+                serialization_options (dict[str, Any], optional): Additional options that may be accessed by subclasses
+            for customization.
 
-        """
-        return cast(
-            bytes,
-            msgpack.packb(
-                self.as_dict(
-                    mashumaro_dialect=MessagePackDialect,
-                    serialization_options=serialization_options,
+            Returns:
+                bytes: The serialized object.
+
+            """
+            return cast(
+                bytes,
+                msgpack.packb(
+                    self.as_dict(
+                        mashumaro_dialect=MessagePackDialect,
+                        serialization_options=serialization_options,
+                    ),
+                    use_bin_type=True,
                 ),
-                use_bin_type=True,
-            ),
-        )
+            )
 
-    @classmethod
-    def from_msgpck(
-        cls: Type[T], value: bytes, serialization_options: dict[str, Any] | None = None
-    ) -> T:
-        """Deserialize this object from MessagePack (as bytes).
+        @classmethod
+        def from_msgpck(
+            cls: Type[T], value: bytes, serialization_options: dict[str, Any] | None = None
+        ) -> T:
+            """Deserialize this object from MessagePack (as bytes).
 
-        Mashumaro dialects are not supported for this method.
+            Mashumaro dialects are not supported for this method.
 
-        Args:
-            value (bytes): The serialized object.
-            serialization_options (dict[str, Any], optional): Additional options that may be accessed by subclasses
-        for customization.
+            Args:
+                value (bytes): The serialized object.
+                serialization_options (dict[str, Any], optional): Additional options that may be accessed by subclasses
+            for customization.
 
-        Returns:
-            T: The deserialized object.
+            Returns:
+                T: The deserialized object.
 
-        """
+            """
 
-        return cls.as_obj(
-            msgpack.unpackb(value, raw=False),
-            mashumaro_dialect=MessagePackDialect,
-            serialization_options=serialization_options,
-        )
+            return cls.as_obj(
+                msgpack.unpackb(value, raw=False),
+                mashumaro_dialect=MessagePackDialect,
+                serialization_options=serialization_options,
+            )
 
-    def to_yaml(
-        self,
-        mashumaro_dialect: Type[Dialect] | None = None,
-        serialization_options: dict[str, Any] | None = None,
-    ) -> str:
-        """Serialize this object to YAML (as a string).
+    if _HAS_YAML:
 
-        Mashumaro dialects are not supported for this method.
+        def to_yaml(
+            self,
+            mashumaro_dialect: Type[Dialect] | None = None,
+            serialization_options: dict[str, Any] | None = None,
+        ) -> str:
+            """Serialize this object to YAML (as a string).
 
-        Args:
-            mashumaro_dialect (Dialect, optional): The Mashumaro dialect to use for serialization.
-            serialization_options (dict[str, Any], optional): Additional options that may be accessed by subclasses
-        for customization.
+            Args:
+                mashumaro_dialect (Dialect, optional): The Mashumaro dialect to use for serialization.
+                serialization_options (dict[str, Any], optional): Additional options that may be accessed by subclasses
+            for customization.
 
-        Returns:
-            str: The serialized object.
+            Returns:
+                str: The serialized object.
 
-        """
-        return yaml.dump(
-            (
+            """
+            return yaml_dumper(
                 self.as_dict(
                     mashumaro_dialect=mashumaro_dialect,
                     serialization_options=serialization_options,
                 )
-            ),
-            Dumper=YamlDumper,
-        )
+            )
 
-    @classmethod
-    def from_yaml(
-        cls: Type[T],
-        value: str | bytes,
-        mashumaro_dialect: Type[Dialect] | None = None,
-        serialization_options: dict[str, Any] | None = None,
-    ) -> T:
-        """Deserialize this object from YAML (as a string).
+        @classmethod
+        def from_yaml(
+            cls: Type[T],
+            value: str | bytes,
+            mashumaro_dialect: Type[Dialect] | None = None,
+            serialization_options: dict[str, Any] | None = None,
+        ) -> T:
+            """Deserialize this object from YAML (as a string).
 
-        Mashumaro dialects are not supported for this method.
+            Args:
+                value (str): The serialized object.
+                mashumaro_dialect (Dialect, optional): The Mashumaro dialect to use for serialization.
+                serialization_options (dict[str, Any], optional): Additional options that may be accessed by subclasses
+            for customization.
 
-        Args:
-            value (str): The serialized object.
-            mashumaro_dialect (Dialect, optional): The Mashumaro dialect to use for serialization.
-            serialization_options (dict[str, Any], optional): Additional options that may be accessed by subclasses
-        for customization.
+            Returns:
+                T: The deserialized object.
 
-        Returns:
-            T: The deserialized object.
+            """
 
-        """
-
-        return cls.as_obj(
-            yaml.load(value, Loader=YamlLoader) or {},
-            mashumaro_dialect=mashumaro_dialect,
-            serialization_options=serialization_options,
-        )
+            return cls.as_obj(
+                yaml_loader(value) or {},
+                mashumaro_dialect=mashumaro_dialect,
+                serialization_options=serialization_options,
+            )
 
 
 def unwrap_invalid_field_exception(exc: InvalidFieldValue) -> tuple[str, BaseException]:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, Type
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from pyoak.node import ASTNode
@@ -51,7 +51,7 @@ class ASTNodeRegistryCollisionError(ASTNodeError):
 class ASTNodeIDCollisionError(ASTNodeError):
     """Raised when an ASTNode ID collision occurs."""
 
-    def __init__(self, existing_node: ASTNode, new_node_class: Type[ASTNode]) -> None:
+    def __init__(self, existing_node: ASTNode, new_node_class: type[ASTNode]) -> None:
         super().__init__(
             f"ID Collision with an existing node type <{existing_node.__class__.__name__}> from <{existing_node.origin.fqn}>. Please use {new_node_class.__name__}.replace() method",
             existing_node,
