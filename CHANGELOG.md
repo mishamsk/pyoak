@@ -35,6 +35,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - TBD
 
+## [1.2.0]
+
+This mainly a backport of enhanced XPath & Pattern Matcher from 2.0.0, but also makes serialization dependencies options as well as removes the ability of TextFileSources to guess file encoding (and chardet dependency with it).
+
+This release was entirely contributed by @dmmoeu. Thanks a lot!
+
+### 🚀 Added
+
+- ASTNode `find` and `findall` API's (backport from v2). See [README](README.md#xpath) for details.
+
+### ✨ Changed
+
+- pyyaml, orjson, msgpack are now optional dependencies. They can be installed via a new set of extras: msgpack, orjson, yaml or all. E.g.: `pip install pyoak[msgpack]`. `DataClassSerializeMixin` and hence `ASTNode` will have `to/from_yaml` and `to/from_msgpack` methods if the corresponding dependencies are installed. `to/from_json` methods are always available and use `json` if `orjson` is not installed.
+
+### ⚠️ Breaking
+
+- Pattern Grammar is now the same as v2 series. This is a breaking change, check out the [README](README.md#pattern-matching) for details.
+- `TextFileSource` no longer guesses file encoding. This is a breaking change, but it's a good thing. If you need to read a file with a specific encoding, read it yourself and pass the content as a string to the `TextFileSource` constructor's `_raw` attribute.
+
+### 🐛 Fixed
+
+- A couple of bugs in v2 pattern matcher were fixed in this release.
+
 ## [1.1.1] - 2023-08-02
 
 Quick hotfix release to restore backwards compatibility with 1.0.0
