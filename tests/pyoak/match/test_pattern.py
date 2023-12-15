@@ -244,12 +244,43 @@ def test_sequence_var_match() -> None:
         origin=origin,
     )
 
-    macher, msg = NodeMatcher.from_pattern("(PTestParent @child_tuple=[(*) -> cap $cap *])")
+    macher, msg = NodeMatcher.from_pattern(
+        "(PTestParent @child_tuple=[(* @foo -> cap_foo) -> cap $cap *])"
+    )
     assert macher is not None, msg
 
     ok, match_dict = macher.match(node)
     assert ok
     assert match_dict["cap"] == f1
+    assert match_dict["cap_foo"] == "predecessor"
+
+
+def test_sequence_empty_match() -> None:
+    node = PTestParent(
+        child_tuple=(),
+        origin=origin,
+    )
+
+    macher, msg = NodeMatcher.from_pattern("(PTestParent @child_tuple=[(PTestChild1) -> cap *])")
+    assert macher is not None, msg
+
+    ok, match_dict = macher.match(node)
+    assert not ok
+    assert not match_dict
+
+    macher, msg = NodeMatcher.from_pattern("(PTestParent @child_tuple=[* -> cap_empty_seq])")
+    assert macher is not None, msg
+
+    ok, match_dict = macher.match(node)
+    assert ok
+    assert match_dict["cap_empty_seq"] == ()
+
+    macher, msg = NodeMatcher.from_pattern("(PTestParent @child_tuple=[] -> cap_empty_node)")
+    assert macher is not None, msg
+
+    ok, match_dict = macher.match(node)
+    assert ok
+    assert match_dict["cap_empty_node"] == ()
 
 
 def test_child_spec_capture() -> None:

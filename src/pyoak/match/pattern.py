@@ -7,7 +7,6 @@ from dataclasses import dataclass, field, replace
 from typing import (
     TYPE_CHECKING,
     Any,
-    ClassVar,
     Iterable,
     Mapping,
     Sequence,
@@ -59,13 +58,6 @@ class BaseMatcher(ABC):
 
 @dataclass(frozen=True, slots=True)
 class AnyMatcher(BaseMatcher):
-    _instance: ClassVar[AnyMatcher | None] = None
-
-    def __new__(cls, *args: Any, **kwargs: Any) -> AnyMatcher:
-        if cls._instance is None:
-            cls._instance = object.__new__(cls)
-        return cls._instance
-
     def _match(self, value: Any, ctx: _Vars) -> _MatchRes:
         return (True, {})
 
@@ -146,7 +138,7 @@ class SequenceMatcher(BaseMatcher):
         # but if we don't have any tail, we can exit early if the lengths
         # don't match
         if (not any_tail and len(value) != len(self.matchers)) or (
-            any_tail and len(value) < len(self.matchers) - 1
+            any_tail and len(value) < len(self.matchers)
         ):
             return (False, {})
 
