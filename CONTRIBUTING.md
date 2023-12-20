@@ -55,11 +55,13 @@ Ready to contribute? Here's how to set up `pyoak` for local development.
     $ git clone git@github.com:your_name_here/pyoak.git
     ```
 
-3. Ensure [poetry](https://python-poetry.org/docs/) is installed.
-4. Install dependencies and start your virtualenv:
+3. Ensure all necessary tools are installed:
+    1. [poetry](https://python-poetry.org/docs/)
+    2. [task](https://taskfile.dev/#/installation)
+4. Initialize python environment, dependcies and tools:
 
     ```
-    $ poetry install
+    $ task init
     ```
 
 5. Create a branch for local development:
@@ -85,7 +87,7 @@ Ready to contribute? Here's how to set up `pyoak` for local development.
     $ git push origin name-of-your-bugfix-or-feature
     ```
 
-8. Submit a pull request through the GitHub website.
+8.  Submit a pull request through the GitHub website.
 
 ## Pull Request Guidelines
 

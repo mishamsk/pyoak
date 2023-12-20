@@ -1,0 +1,84 @@
+version: "3"
+
+dotenv:
+  - .env
+
+tasks:
+  # Initialize
+  init:
+    desc: "Initialize the project"
+    cmds:
+      # Create virtualenv if it doesn't exist
+      - test -d .venv || python -m venv .venv
+      - poetry install --sync
+      - pre-commit install
+
+  # Type check and lint
+  pre-commit:
+    desc: "Run pre-commit hooks on all files"
+    cmd: pre-commit run --all-files
+    ignore_error: true
+
+  mypy:
+    desc: "Run type checking"
+    cmd: mypy src tests
+    ignore_error: true
+
+  lint:
+    desc: "Shortcut for running mypy & pre-commit"
+    deps: [mypy, pre-commit]
+
+  # Cleanup
+  clean-build:
+    desc: "Remove dist artifacts"
+    cmd: rm -rf dist
+
+  clean-pyc:
+    desc: remove Python file artifacts
+    cmds:
+      - find . -name '*.pyc' -not -path '*/.venv/*' -exec rm -f {} +
+      - find . -name '*.pyo' -not -path '*/.venv/*' -exec rm -f {} +
+      - find . -name '*~' -not -path '*/.venv/*' -exec rm -f {} +
+      - find . -name '__pycache__' -not -path '*/.venv/*' -exec rm -fr {} +
+
+  clean-caches:
+    desc: remove caches
+    cmds:
+      - rm -rf .pytest_cache
+      - rm -rf .mypy_cache
+      - rm -rf .ruff_cache
+      - rm -rf .tox
+
+  clean-test:
+    desc: remove test and coverage artifacts
+    cmds:
+      - rm -f .coverage
+      - rm -f .coverage.*
+      - rm -f coverage.xml
+      - rm -f report.xml
+      - rm -fr htmlcov/
+      - rm -fr .pytest_cache
+      - rm -fr testtemp/
+
+  clean:
+    deps:
+      [
+        clean-pyc,
+        clean-test,
+        clean-build,
+        # clean-caches, # do not clean caches by default
+      ]
+
+  # Testing
+  test:
+    desc: run tests for all python versions
+    cmd: poetry run tox -e "py*"
+
+  # Git stuff
+  get-changelog-from-last-tag:
+    desc: list all commits since last tag
+    cmd: git log $(git describe --tags --abbrev=0)..@ --pretty=%B --no-merges
+
+  get-changelog-from-main:
+    desc: list all commits since main
+    cmd: git log main..@ --pretty=%B --no-merges
