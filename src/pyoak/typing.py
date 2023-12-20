@@ -6,6 +6,7 @@ from dataclasses import KW_ONLY, InitVar, fields
 from dataclasses import Field as DataClassField
 from enum import Enum
 from functools import lru_cache
+from itertools import chain
 from typing import (
     Any,
     ClassVar,
@@ -18,6 +19,7 @@ from typing import (
     Sequence,
     Tuple,
     Type,
+    TypeVar,
     Union,
     get_args,
     get_origin,
@@ -372,12 +374,13 @@ def check_annotations(type_: type, node_base_type: type) -> bool:
 
 class FieldTypeInfo(NamedTuple):
     is_collection: bool
+    is_optional: bool
     resolved_type: type
 
 
 @cached
-def get_type_info(type_: Any, allow_sequence: bool = True) -> FieldTypeInfo:
-    return FieldTypeInfo(is_collection(type_), type_)
+def get_type_info(type_: Any) -> FieldTypeInfo:
+    return FieldTypeInfo(is_collection(type_), is_optional(type_), type_)
 
 
 def get_field_types(type_: type[DataclassInstance]) -> dict[Field, Any]:
@@ -402,6 +405,57 @@ def get_field_types(type_: type[DataclassInstance]) -> dict[Field, Any]:
         ret[field] = f_type
 
     return ret
+
+
+_BT = TypeVar("_BT")
+
+
+def get_type_args_as_tuple(
+    type_: Any, node_base_type: type[_BT], allow_sequence: bool = True
+) -> tuple[type[_BT], ...]:
+    """Get a tuple of node_base_type subclasses from a type annotation.
+
+    For tuples, the types of the elements are returned.
+
+    """
+
+    args = get_args(type_)
+    if is_optional(type_):
+        return tuple(
+            chain.from_iterable(
+                get_type_args_as_tuple(t, node_base_type, allow_sequence=False)
+                for t in args
+                if t is not type(None)
+            )
+        )
+
+    if is_union(type_):
+        return tuple(
+            chain.from_iterable(
+                get_type_args_as_tuple(t, node_base_type, allow_sequence=False) for t in args
+            )
+        )
+
+    if is_tuple(type_) and allow_sequence:
+        if len(args) == 0:
+            return ()
+
+        if len(args) == 2 and args[1] is Ellipsis:
+            return get_type_args_as_tuple(args[0], node_base_type, allow_sequence=False)
+        else:
+            return tuple(
+                chain.from_iterable(
+                    get_type_args_as_tuple(t, node_base_type, allow_sequence=False) for t in args
+                )
+            )
+
+    try:
+        if issubclass(type_, node_base_type):
+            return (type_,)
+    except TypeError:
+        pass
+
+    return ()
 
 
 def process_node_fields(

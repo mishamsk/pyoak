@@ -61,6 +61,7 @@ twine = "^4.0.2"
 [tool.pytest.ini_options]
 minversion = "7.0"
 addopts = "--basetemp=testtemp"
+testpaths = "tests"
 # markers are used to run only selected tests
 markers = [
     "dep_msgpack: test msgpack optional dependency",

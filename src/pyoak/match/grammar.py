@@ -5,7 +5,7 @@ class_spec: ANY | CLASS ("|" CLASS)*
 
 field_spec: "@" FIELD_NAME ("=" (sequence | value))? capture?
 
-sequence: "[" (value capture?)* (ANY capture?)? "]"
+sequence: "[" (value capture? ","?)* (ANY capture?)? "]"
 
 value: tree | var | NONE | ESCAPED_STRING
 
