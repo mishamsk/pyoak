@@ -521,14 +521,16 @@ def test_process_node_fields() -> None:
     child_fields, props = process_node_fields(GoodExt, MockASTNode)
 
     assert child_fields == {
-        GoodExt.__dataclass_fields__["child"]: FieldTypeInfo(False, MockASTNode),
-        GoodExt.__dataclass_fields__["child_list"]: FieldTypeInfo(True, tuple[MockASTNode, ...]),
+        GoodExt.__dataclass_fields__["child"]: FieldTypeInfo(False, False, MockASTNode),
+        GoodExt.__dataclass_fields__["child_list"]: FieldTypeInfo(
+            True, False, tuple[MockASTNode, ...]
+        ),
     }
 
     assert props == {
-        GoodExt.__dataclass_fields__["prop"]: FieldTypeInfo(False, str),
-        GoodExt.__dataclass_fields__["tuple_prop"]: FieldTypeInfo(True, tuple[str, ...]),
-        GoodExt.__dataclass_fields__["cust_prop"]: FieldTypeInfo(False, Custom),
+        GoodExt.__dataclass_fields__["prop"]: FieldTypeInfo(False, False, str),
+        GoodExt.__dataclass_fields__["tuple_prop"]: FieldTypeInfo(True, False, tuple[str, ...]),
+        GoodExt.__dataclass_fields__["cust_prop"]: FieldTypeInfo(False, False, Custom),
     }
 
     # Postponed annotations

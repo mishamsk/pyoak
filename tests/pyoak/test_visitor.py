@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
-from pyoak.node import ASTNode, ASTVisitor
+from pyoak.node import ASTNode
 from pyoak.origin import NO_ORIGIN
+from pyoak.visitor import ASTVisitor
 
 
 @dataclass

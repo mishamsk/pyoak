@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import Field as DataClassField
 from dataclasses import dataclass, field
 from itertools import repeat
-from typing import Iterable, cast
+from typing import Any, Iterable, cast
 
 import pytest
 from deepdiff import DeepDiff
+from mashumaro.types import SerializableType
 from pyoak.error import (
     ASTNodeDuplicateChildrenError,
     ASTNodeIDCollisionError,
@@ -20,15 +22,24 @@ from pyoak.node import (
     AST_SERIALIZE_DIALECT_KEY,
     ASTNode,
     ASTSerializationDialects,
-    Field,
 )
-from pyoak.origin import NO_ORIGIN, CodeOrigin, MemoryTextSource, get_code_range
+from pyoak.origin import NO_ORIGIN, CodeOrigin, MemoryTextSource, Origin, get_code_range
 from pyoak.serialize import TYPE_KEY
+
+Field = DataClassField[Any]
+
+# get_child_nodes_with_field code is compiled on the fly on the first call
+# since it is used in __post_init__ of ASTNode, it happens on the first
+# instantiation of any ASTNode subclass
+# this indirectly tests that codegen for the ASTNode class itself doesn't break the subclasses
+_ = ASTNode(origin=NO_ORIGIN)
 
 
 @dataclass
 class ChildNode(ASTNode):
     attr: str
+
+    origin: Origin = field(default=NO_ORIGIN, kw_only=True)
 
 
 @dataclass
@@ -53,9 +64,11 @@ class HiddenNonCompareAttrNode(ASTNode):
 class ParentNode(ASTNode):
     attr: str
     single_child: ASTNode
-    child_list: tuple[ASTNode, ...]
-    not_a_child_list: list[str]
+    child_seq: tuple[ASTNode, ...]
+    not_a_child_seq: tuple[str, ...]
     restricted_child: ChildNode | OtherNode | None = None
+
+    origin: Origin = field(default=NO_ORIGIN, kw_only=True)
 
 
 @dataclass
@@ -70,9 +83,8 @@ class StaticFieldGettersTest(ASTNode):
     child: ASTNode
     optional_child: ASTNode | None
     child_list: tuple[ASTNode, ...]
-    optional_child_list: tuple[ASTNode, ...] | None
+    optional_child_list: tuple[ASTNode, ...]
     _not_hidden_child: ASTNode
-    not_a_pure_child: str | ASTNode
     non_compare_attr: str = field(compare=False)
     non_init_attr: str = field(init=False)
 
@@ -80,8 +92,57 @@ class StaticFieldGettersTest(ASTNode):
 origin = CodeOrigin(MemoryTextSource("test"), get_code_range(0, 1, 0, 3, 1, 3))
 
 
-def _get_fname_set(fields: Iterable[tuple[str, Field]]) -> set[str]:
-    return {f[0] for f in fields}
+@pytest.mark.skipif(
+    not hasattr(SerializableType, "__slots__"),
+    reason="Mashumaro version doesn't support slots",
+)
+def test_slotted() -> None:
+    @dataclass(slots=True)
+    class SlottedNode(ASTNode):
+        attr: str
+
+    assert not hasattr(SlottedNode("test", origin=NO_ORIGIN), "__dict__")
+    assert SlottedNode("test", origin=NO_ORIGIN).origin == NO_ORIGIN
+
+
+def test_repr() -> None:
+    # Makre sure custom repr is set on subclasses
+    # and compare formatting to expected.
+    # Test on nested tree to make sure it works (repr goal is to avoid printing the whole tree)
+    child = ChildNode("1")
+
+    mid_node = ParentNode(
+        attr="Mid",
+        single_child=child,
+        child_seq=(),
+        not_a_child_seq=(),
+    )
+
+    parent = ParentNode(
+        attr="Test",
+        single_child=mid_node,
+        # use the same child node twice
+        child_seq=(child.duplicate(),),
+        not_a_child_seq=(),
+        origin=origin,
+    )
+
+    assert repr(child) == (
+        f"Leaf<ChildNode>(Props:id={child.id}, "
+        f"content_id={child.content_id}, original_id=None, id_collision_with=None,"
+        " attr='1';origin=NoSource@NoOrigin)"
+    )
+    assert repr(parent) == (
+        f"Sub-tree<ParentNode>(Props:id={parent.id}, "
+        f"content_id={parent.content_id}, original_id=None, id_collision_with=None"
+        ", attr='Test', not_a_child_seq=();"
+        "Children:single_child=<ParentNode>, child_seq=<ChildNode>...(1 total),"
+        f" restricted_child=None;origin=<memory>@{origin.fqn})"
+    )
+
+
+def _get_fname_set(fields: Iterable[Field]) -> set[str]:
+    return {f.name for f in fields}
 
 
 def test_get_property_fields() -> None:
@@ -117,22 +178,13 @@ def test_get_property_fields() -> None:
 
 
 def test_get_child_fields() -> None:
-    assert set(StaticFieldGettersTest.get_child_fields().keys()) == {
+    assert _get_fname_set(StaticFieldGettersTest.get_child_fields().keys()) == {
         "child",
         "optional_child",
         "child_list",
         "optional_child_list",
         "_not_hidden_child",
-        "not_a_pure_child",
     }
-
-
-def test_subclass_error() -> None:
-    with pytest.raises(ValueError):
-
-        @dataclass
-        class ChildNode(ASTNode):
-            other_attr: str
 
 
 def test_id_handling() -> None:
@@ -200,8 +252,8 @@ def test_detached_clones() -> None:
     parent = ParentNode(
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
 
@@ -212,8 +264,8 @@ def test_detached_clones() -> None:
         id=parent.id,
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
         create_detached=True,
     )
@@ -225,7 +277,7 @@ def test_detached_clones() -> None:
     assert det_parent.id_collision_with is None
     assert det_parent.original_id is None
 
-    for new_child, old_child in zip([det_parent.single_child, *det_parent.child_list], ch_nodes):
+    for new_child, old_child in zip([det_parent.single_child, *det_parent.child_seq], ch_nodes):
         assert new_child is old_child
         assert new_child.is_attached_subtree
         assert new_child.parent is parent
@@ -240,7 +292,7 @@ def test_detached_clones() -> None:
     assert det_parent.id_collision_with is None
     assert det_parent.original_id is None
 
-    for new_child, old_child in zip([det_parent.single_child, *det_parent.child_list], ch_nodes):
+    for new_child, old_child in zip([det_parent.single_child, *det_parent.child_seq], ch_nodes):
         assert new_child.id == old_child.id
         assert new_child == old_child
         assert new_child is not old_child
@@ -259,8 +311,8 @@ def test_parent_handling() -> None:
     parent = ParentNode(
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
 
@@ -273,8 +325,8 @@ def test_parent_handling() -> None:
         _ = ParentNode(
             attr="Test Second Parent",
             single_child=ch_nodes[1],
-            child_list=tuple(ch_nodes[3:5]),
-            not_a_child_list=[],
+            child_seq=tuple(ch_nodes[3:5]),
+            not_a_child_seq=tuple([]),
             origin=origin,
         )
 
@@ -288,8 +340,8 @@ def test_parent_handling() -> None:
     new_parent = ParentNode(
         attr="Test New Parent",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
 
@@ -305,8 +357,8 @@ def test_parent_handling() -> None:
     new_parent = ParentNode(
         attr="Test New Parent",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
 
@@ -333,8 +385,8 @@ def test_content_id() -> None:
     parent = ParentNode(
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
     duplicate = parent.duplicate()
@@ -374,15 +426,15 @@ def test_unique_children_check() -> None:
         _ = ParentNode(
             attr="Test",
             single_child=ch_nodes[0],
-            child_list=tuple(repeat(ch_nodes[1], 2)),
-            not_a_child_list=[str(i) for i in range(10)],
+            child_seq=tuple(repeat(ch_nodes[1], 2)),
+            not_a_child_seq=tuple([str(i) for i in range(10)]),
             origin=origin,
         )
 
     assert excinfo.value.child is ch_nodes[1]
-    assert excinfo.value.last_field_name == "child_list"
+    assert excinfo.value.last_field_name == "child_seq"
     assert excinfo.value.last_index == 0
-    assert excinfo.value.new_field_name == "child_list"
+    assert excinfo.value.new_field_name == "child_seq"
     assert excinfo.value.new_index == 1
 
     # Cleanup in case GC won't collect them before the next test
@@ -400,8 +452,8 @@ def test_detach() -> None:
     parent = ParentNode(
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
 
@@ -415,8 +467,8 @@ def test_detach() -> None:
     parent = ParentNode(
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
 
@@ -430,8 +482,8 @@ def test_detach() -> None:
     parent = ParentNode(
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
 
@@ -445,8 +497,8 @@ def test_detach() -> None:
     parent = ParentNode(
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
 
@@ -468,8 +520,8 @@ def test_attach() -> None:
     parent = ParentNode(
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
 
@@ -486,8 +538,8 @@ def test_attach() -> None:
     new_parent = ParentNode(
         attr="New Test",
         single_child=parent.single_child,
-        child_list=tuple(),
-        not_a_child_list=[],
+        child_seq=tuple(),
+        not_a_child_seq=tuple([]),
         origin=origin,
     )
 
@@ -519,16 +571,16 @@ def test_replace() -> None:
     parent = ParentNode(
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
 
     another_parent = ParentNode(
         attr="Another Test",
         single_child=ChildNode("Another Child", origin=origin),
-        child_list=tuple(),
-        not_a_child_list=[],
+        child_seq=tuple(),
+        not_a_child_seq=tuple([]),
         origin=origin,
     )
 
@@ -580,8 +632,8 @@ def test_replace() -> None:
     assert new_child.parent is new_parent
     assert parent.single_child is not new_child
     assert parent.attr == new_parent.attr
-    assert parent.child_list == new_parent.child_list
-    assert parent.not_a_child_list == new_parent.not_a_child_list
+    assert parent.child_seq == new_parent.child_seq
+    assert parent.not_a_child_seq == new_parent.not_a_child_seq
     assert parent.origin == new_parent.origin
     assert ParentNode.get(parent.id) is new_parent
     assert not new_child.detached
@@ -606,43 +658,43 @@ def test_replace() -> None:
     sub = ParentNode(
         attr="Sub",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:2]),
-        not_a_child_list=[],
+        child_seq=tuple(ch_nodes[1:2]),
+        not_a_child_seq=tuple([]),
         origin=origin,
     )
 
     sub1 = ParentNode(
         attr="Sub1",
         single_child=ch_nodes[2],
-        child_list=tuple(ch_nodes[3:5]),
-        not_a_child_list=[],
+        child_seq=tuple(ch_nodes[3:5]),
+        not_a_child_seq=tuple([]),
         origin=origin,
     )
 
     sub2 = ParentNode(
         attr="Sub2",
         single_child=ch_nodes[5],
-        child_list=tuple(ch_nodes[6:8]),
-        not_a_child_list=[],
+        child_seq=tuple(ch_nodes[6:8]),
+        not_a_child_seq=tuple([]),
         origin=origin,
     )
 
     root = ParentNode(
         attr="Sub",
         single_child=sub,
-        child_list=(sub1, sub2),
-        not_a_child_list=[],
+        child_seq=(sub1, sub2),
+        not_a_child_seq=tuple([]),
         origin=origin,
     )
 
     assert ch_nodes[8].is_attached_root
     assert sub2.single_child is ch_nodes[5]
-    assert sub2.child_list == (ch_nodes[6], ch_nodes[7])
-    new_sub2 = sub2.replace(single_child=ch_nodes[8], child_list=(ch_nodes[6], ch_nodes[9]))
+    assert sub2.child_seq == (ch_nodes[6], ch_nodes[7])
+    new_sub2 = sub2.replace(single_child=ch_nodes[8], child_seq=(ch_nodes[6], ch_nodes[9]))
 
     assert new_sub2 is not sub2
     assert new_sub2.single_child is ch_nodes[8]
-    assert new_sub2.child_list == (ch_nodes[6], ch_nodes[9])
+    assert new_sub2.child_seq == (ch_nodes[6], ch_nodes[9])
     assert new_sub2.parent is root
     assert new_sub2 in root.get_child_nodes()
     assert sub2 not in root.get_child_nodes()
@@ -675,16 +727,16 @@ def test_replace_with(caplog: pytest.LogCaptureFixture) -> None:
     parent = SubParentNode(
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:-2]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:-2]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
 
     another = ParentNode(
         attr="Test2",
         single_child=ch_nodes[-2],
-        child_list=(),
-        not_a_child_list=[],
+        child_seq=(),
+        not_a_child_seq=tuple([]),
         origin=origin,
     )
 
@@ -697,7 +749,7 @@ def test_replace_with(caplog: pytest.LogCaptureFixture) -> None:
     assert old.detached
     assert old not in parent.get_child_nodes()
     assert new_child in parent.get_child_nodes()
-    assert new_child is parent.child_list[0]
+    assert new_child is parent.child_seq[0]
     assert new_child.original_id == orig_id
     assert new_child.id == old.id
 
@@ -720,8 +772,8 @@ def test_replace_with(caplog: pytest.LogCaptureFixture) -> None:
     another = ParentNode(
         attr="Test2",
         single_child=ChildNode("single", origin=origin),
-        child_list=(),
-        not_a_child_list=[],
+        child_seq=(),
+        not_a_child_seq=tuple([]),
         origin=origin,
     )
 
@@ -779,8 +831,8 @@ def test_replace_with(caplog: pytest.LogCaptureFixture) -> None:
     attached_parent = ParentNode(
         attr="Test2",
         single_child=old,
-        child_list=(),
-        not_a_child_list=[],
+        child_seq=(),
+        not_a_child_seq=tuple([]),
         origin=origin,
     )
 
@@ -793,8 +845,8 @@ def test_replace_with(caplog: pytest.LogCaptureFixture) -> None:
     new = ParentNode(
         attr="Test2",
         single_child=new_child,
-        child_list=(),
-        not_a_child_list=[],
+        child_seq=(),
+        not_a_child_seq=tuple([]),
         origin=origin,
         create_detached=True,
     )
@@ -821,8 +873,8 @@ def test_replace_with(caplog: pytest.LogCaptureFixture) -> None:
     with_restricted = ParentNode(
         attr="Test3",
         single_child=ChildNode("some", origin=origin),
-        child_list=(),
-        not_a_child_list=[],
+        child_seq=(),
+        not_a_child_seq=tuple([]),
         restricted_child=to_repace,
         origin=origin,
     )
@@ -843,19 +895,19 @@ def test_replace_with(caplog: pytest.LogCaptureFixture) -> None:
     parent = ParentNode(
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:-2]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:-2]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
 
     ch_nodes[2].replace_with(None)
     assert ch_nodes[2].detached
     assert ch_nodes[2] not in parent.get_child_nodes()
-    assert parent.child_list == (ch_nodes[1], *ch_nodes[3:-2])
+    assert parent.child_seq == (ch_nodes[1], *ch_nodes[3:-2])
     for ch_node in ch_nodes[3:-2]:
         # check the parent index has been updated to reflect the new order
         assert ch_node.parent is parent
-        assert parent.child_list.index(ch_node) == ch_node.parent_index
+        assert parent.child_seq.index(ch_node) == ch_node.parent_index
 
     # Test replace non optional field with None
     with pytest.raises(ASTNodeReplaceWithError) as exc_info:
@@ -882,8 +934,8 @@ def test_duplicate() -> None:
     parent = ParentNode(
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
     dup_parent = parent.duplicate()
@@ -921,8 +973,8 @@ def test_serialization_and_equality() -> None:
     parent = ParentNode(
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
 
@@ -937,8 +989,8 @@ def test_serialization_and_equality() -> None:
     assert parent == deserialized
 
     # id_collision_with & original_id are not used in comparison, but should be set correctly
-    assert deserialized.child_list[-1].id_collision_with == ch_nodes[-1].id_collision_with
-    assert deserialized.child_list[-1].original_id == ch_nodes[-1].original_id
+    assert deserialized.child_seq[-1].id_collision_with == ch_nodes[-1].id_collision_with
+    assert deserialized.child_seq[-1].original_id == ch_nodes[-1].original_id
 
     # Should still be equal even if id is changed
     deserialized.detach()
@@ -987,8 +1039,8 @@ def test_ast_explorer_serialization_dialect() -> None:
     parent = ParentNode(
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
 
@@ -1011,7 +1063,7 @@ def test_ast_explorer_serialization_dialect() -> None:
     assert "_children" in serialized_dialect_dict
     assert serialized_dialect_dict["_children"] == [
         "single_child",
-        "child_list",
+        "child_seq",
         "restricted_child",
     ]
 
@@ -1028,8 +1080,8 @@ def test_ast_test_serialization_dialect() -> None:
     parent = ParentNode(
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
 
@@ -1046,8 +1098,8 @@ def test_ast_test_serialization_dialect() -> None:
         "source_uri": "",
         "source_type": "",
     }
-    assert "child_list" in serialized_dialect_dict
-    for child in serialized_dialect_dict["child_list"]:
+    assert "child_seq" in serialized_dialect_dict
+    for child in serialized_dialect_dict["child_seq"]:
         assert "origin" in child
         assert "source" in child["origin"]
         assert child["origin"]["source"] == {
@@ -1073,8 +1125,8 @@ def test_to_msgpack() -> None:
     parent = ParentNode(
         attr="Test",
         single_child=ch_nodes[0],
-        child_list=tuple(ch_nodes[1:]),
-        not_a_child_list=[str(i) for i in range(10)],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=tuple([str(i) for i in range(10)]),
         origin=origin,
     )
 
@@ -1117,22 +1169,22 @@ def test_is_equal() -> None:
     parent = ParentNode(
         attr="Parent",
         single_child=ChildNode("single_child", origin=origin),
-        child_list=(
+        child_seq=(
             ChildNode("child_list1", origin=origin),
             ChildNode("child_list2", origin=origin),
         ),
-        not_a_child_list=[],
+        not_a_child_seq=tuple([]),
         origin=origin,
     )
 
     other_parent = ParentNode(
         attr="Parent",
         single_child=ChildNode("single_child", origin=other_origin),
-        child_list=(
+        child_seq=(
             ChildNode("child_list1", origin=other_origin),
             ChildNode("child_list2", origin=other_origin),
         ),
-        not_a_child_list=[],
+        not_a_child_seq=tuple([]),
         origin=other_origin,
     )
     assert parent != other_parent
@@ -1143,11 +1195,11 @@ def test_is_equal() -> None:
     other_parent = ParentNode(
         attr="Parent",
         single_child=ChildNode("single_child", origin=other_origin),
-        child_list=(
+        child_seq=(
             ChildNode("child_list1", origin=other_origin),
             ChildNode("child_list2-changed", origin=other_origin),
         ),
-        not_a_child_list=[],
+        not_a_child_seq=tuple([]),
         origin=other_origin,
     )
     assert parent != other_parent
@@ -1169,162 +1221,134 @@ def test_to_content_dict() -> None:
     parent = ParentNode(
         attr="Parent",
         single_child=single_child,
-        child_list=(child_list,),
-        not_a_child_list=["1"],
+        child_seq=(child_list,),
+        not_a_child_seq=("1",),
         origin=origin,
     )
 
     assert parent.to_properties_dict() == dict(
         attr="Parent",
-        not_a_child_list=["1"],
+        not_a_child_seq=("1",),
     )
 
 
-@dataclass
-class Nested(ASTNode):
-    attr: str
+@dataclass(slots=True)
+class BTreeNode(ASTNode):
+    v: int
+    left: BTreeNode | None
+    right: BTreeNode | None
+
+    origin: Origin = field(default=NO_ORIGIN, kw_only=True)
 
 
-@dataclass
-class Middle(ASTNode):
-    nested: Nested | Middle
+def _btree_from_value_dict(d: dict[int, Any]) -> BTreeNode | None:
+    v, children = next(iter(d.items()))
+    left_d: dict[int, Any] | None = None
+    right_d: dict[int, Any] | None = None
+
+    if children:
+        lr = list(children.items())
+        if len(lr) > 2:
+            raise ValueError("Too many children")
+
+        k1, v1 = lr[0]
+        if k1 > 0:
+            left_d = {k1: v1}
+
+        if len(lr) == 2:
+            k2, v2 = lr[1]
+            right_d = {k2: v2}
+
+    left = _btree_from_value_dict(left_d) if left_d is not None else None
+    right = _btree_from_value_dict(right_d) if right_d is not None else None
+    return BTreeNode(v, left, right)
 
 
-@dataclass
-class Root(ASTNode):
-    middle_tuple: tuple[Middle, ...]
-
-
-def test_xpath() -> None:
-    n = Nested("test", origin=origin)
-    assert n.xpath is None
-
-    assert n.calculate_xpath()
-    assert n.xpath == "/@root[0]Nested"
-
-    m1 = Middle(n, origin=origin)
-
-    assert not n.calculate_xpath()
-    assert m1.calculate_xpath()
-    assert m1.xpath == "/@root[0]Middle"
-    assert n.xpath == "/@root[0]Middle/@nested[0]Nested"
-
-    n2 = Nested("test2", origin=origin)
-    m2 = Middle(n2, origin=origin)
-    r = Root((m1, m2), origin=origin)
-
-    assert r.calculate_xpath()
-    assert r.xpath == "/@root[0]Root"
-    assert m1.xpath == "/@root[0]Root/@middle_tuple[0]Middle"
-    assert m2.xpath == "/@root[0]Root/@middle_tuple[1]Middle"
-    assert n2.xpath == "/@root[0]Root/@middle_tuple[1]Middle/@nested[0]Nested"
-
-    r.detach()
+def _traversed_nodes_to_values(res: Iterable[ASTNode]) -> list[int]:
+    return [cast(BTreeNode, n).v for n in res]
 
 
 def test_walkers() -> None:
-    n1 = Nested("test1", origin=origin)
-    n2 = Nested("test2", origin=origin)
+    # DFS, top-down tree
+    dfs_td = cast(
+        BTreeNode,
+        _btree_from_value_dict(
+            {1: {2: {3: {4: {}, 5: {6: {}}}, 7: {8: {}}}, 9: {10: {11: {-1: {}, 12: {}}}}}}
+        ),
+    )
+    # no filter, no prune
+    assert _traversed_nodes_to_values(dfs_td.dfs()) == list(range(1, 13))
 
-    middle_nested1 = Middle(n1, origin=origin)
-    middle_nested2 = Middle(n2, origin=origin)
-    middle_middle = Middle(middle_nested1, origin=origin)
-    r = Root((middle_nested2, middle_middle), origin=origin)
+    # pruned
+    def _prune(node: ASTNode) -> bool:
+        return cast(BTreeNode, node).v == 2
 
-    # DFS, no filter
-    assert list(r.dfs()) == [r, middle_nested2, n2, middle_middle, middle_nested1, n1]
-    assert list(r.dfs(bottom_up=True)) == [
-        n2,
-        middle_nested2,
-        n1,
-        middle_nested1,
-        middle_middle,
-        r,
-    ]
-    assert list(r.dfs(skip_self=True)) == [
-        middle_nested2,
-        n2,
-        middle_middle,
-        middle_nested1,
-        n1,
-    ]
-    assert list(r.dfs(bottom_up=True, skip_self=True)) == [
-        n2,
-        middle_nested2,
-        n1,
-        middle_nested1,
-        middle_middle,
+    assert _traversed_nodes_to_values(dfs_td.dfs(prune=_prune)) == [1, 2, *list(range(9, 13))]
+
+    # filtered
+    def _filter(node: ASTNode) -> bool:
+        return cast(BTreeNode, node).v % 2 == 0
+
+    assert _traversed_nodes_to_values(dfs_td.dfs(filter=_filter)) == [
+        v for v in range(2, 13) if v % 2 == 0
     ]
 
-    # DFS, with filter
-    assert list(r.dfs(filter=lambda n: not isinstance(n, Nested) or n.attr != "test2")) == [
-        r,
-        middle_nested2,
-        middle_middle,
-        middle_nested1,
-        n1,
-    ]
-    assert list(
-        r.dfs(bottom_up=True, filter=lambda n: not isinstance(n, Middle) or n.nested != n1)
-    ) == [
-        n2,
-        middle_nested2,
-        n1,
-        middle_middle,
-        r,
-    ]
-    assert list(
-        r.dfs(
-            skip_self=True,
-            filter=lambda n: isinstance(n, Middle) and isinstance(n.nested, Middle),
-        )
-    ) == [middle_middle]
+    # filtered & pruned
+    assert _traversed_nodes_to_values(dfs_td.dfs(filter=_filter, prune=_prune)) == [2, 10, 12]
 
-    # DFS, with prune
-    assert list(r.dfs(prune=lambda n: isinstance(n, Middle))) == [
-        r,
-        middle_nested2,
-        middle_middle,
+    # DFS, bottom-up tree
+    dfs_bu = cast(
+        BTreeNode,
+        _btree_from_value_dict(
+            {12: {7: {4: {1: {}, 3: {2: {}}}, 6: {5: {}}}, 11: {10: {9: {-1: {}, 8: {}}}}}}
+        ),
+    )
+
+    assert _traversed_nodes_to_values(dfs_bu.dfs(bottom_up=True)) == list(range(1, 13))
+
+    # pruned
+    def _prune(node: ASTNode) -> bool:  # type: ignore[no-redef]
+        return cast(BTreeNode, node).v == 7
+
+    assert _traversed_nodes_to_values(dfs_bu.dfs(prune=_prune, bottom_up=True)) == list(
+        range(7, 13)
+    )
+
+    # filtered
+    assert _traversed_nodes_to_values(dfs_bu.dfs(filter=_filter, bottom_up=True)) == [
+        v for v in range(1, 13) if v % 2 == 0
     ]
 
-    # BFS, no filter
-    assert list(r.bfs()) == [r, middle_nested2, middle_middle, n2, middle_nested1, n1]
-    assert list(r.bfs(skip_self=True)) == [
-        middle_nested2,
-        middle_middle,
-        n2,
-        middle_nested1,
-        n1,
+    # filtered & pruned
+    assert _traversed_nodes_to_values(dfs_bu.dfs(filter=_filter, prune=_prune, bottom_up=True)) == [
+        8,
+        10,
+        12,
     ]
 
-    # BFS, with filter
-    assert list(r.bfs(filter=lambda n: not isinstance(n, Nested) or n.attr != "test2")) == [
-        r,
-        middle_nested2,
-        middle_middle,
-        middle_nested1,
-        n1,
+    # BFS tree (always top-down)
+    bfs_r = cast(
+        BTreeNode,
+        _btree_from_value_dict(
+            {1: {2: {4: {7: {}, 8: {11: {}}}, 5: {9: {}}}, 3: {6: {10: {12: {}}}}}}
+        ),
+    )
+
+    assert _traversed_nodes_to_values(bfs_r.bfs()) == list(range(1, 13))
+
+    # pruned
+    def _prune(node: ASTNode) -> bool:  # type: ignore[no-redef]
+        return cast(BTreeNode, node).v == 2
+
+    assert _traversed_nodes_to_values(bfs_r.bfs(prune=_prune)) == [1, 2, 3, 6, 10, 12]
+
+    # filtered
+    assert _traversed_nodes_to_values(bfs_r.bfs(filter=_filter)) == [
+        v for v in range(2, 13) if v % 2 == 0
     ]
 
-    # Gather, no filter
-    assert list(r.gather(ASTNode)) == [
-        r,
-        middle_nested2,
-        n2,
-        middle_middle,
-        middle_nested1,
-        n1,
-    ]
-    assert list(r.gather(Middle, exact_type=True)) == [
-        middle_nested2,
-        middle_middle,
-        middle_nested1,
-    ]
-
-    # Gather, with filter
-    assert list(r.gather(Nested, extra_filter=lambda n: cast(Nested, n).attr != "test2")) == [n1]
-
-    r.detach()
+    # filtered & pruned
+    assert _traversed_nodes_to_values(bfs_r.bfs(filter=_filter, prune=_prune)) == [2, 6, 10, 12]
 
 
 def test_gather() -> None:
@@ -1337,16 +1361,16 @@ def test_gather() -> None:
     mid = ParentNode(
         attr="Mid",
         single_child=ch,
-        child_list=(sub_ch, other),
-        not_a_child_list=[],
+        child_seq=(sub_ch, other),
+        not_a_child_seq=tuple([]),
         origin=origin,
     )
 
     root = ParentNode(
         attr="Root",
         single_child=mid,
-        child_list=(ch1, other1),
-        not_a_child_list=[],
+        child_seq=(ch1, other1),
+        not_a_child_seq=tuple([]),
         origin=origin,
     )
 
@@ -1370,16 +1394,16 @@ def test_find() -> None:
     mid = ParentNode(
         attr="Mid",
         single_child=ch,
-        child_list=(sub_ch, other),
-        not_a_child_list=[],
+        child_seq=(sub_ch, other),
+        not_a_child_seq=tuple([]),
         origin=origin,
     )
 
     root = ParentNode(
         attr="Root",
         single_child=mid,
-        child_list=(ch1, other1),
-        not_a_child_list=[],
+        child_seq=(ch1, other1),
+        not_a_child_seq=tuple([]),
         origin=origin,
     )
 
@@ -1402,16 +1426,16 @@ def test_findall() -> None:
     mid = ParentNode(
         attr="Mid",
         single_child=ch,
-        child_list=(sub_ch, other),
-        not_a_child_list=[],
+        child_seq=(sub_ch, other),
+        not_a_child_seq=tuple([]),
         origin=origin,
     )
 
     root = ParentNode(
         attr="Root",
         single_child=mid,
-        child_list=(ch1, other1),
-        not_a_child_list=[],
+        child_seq=(ch1, other1),
+        not_a_child_seq=tuple([]),
         origin=origin,
     )
 
@@ -1426,6 +1450,21 @@ def test_findall() -> None:
 
     with pytest.raises(ASTXpathDefinitionError):
         next(root.findall("NonExistentClass"))
+
+
+@dataclass
+class Nested(ASTNode):
+    attr: str
+
+
+@dataclass
+class Middle(ASTNode):
+    nested: Nested | Middle
+
+
+@dataclass
+class Root(ASTNode):
+    middle_tuple: tuple[Middle, ...]
 
 
 class MiddleSubclass(Middle):

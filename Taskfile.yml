@@ -72,7 +72,7 @@ tasks:
   # Testing
   test:
     desc: run tests for all python versions
-    cmd: poetry run tox -e "py*"
+    cmd: poetry run tox r -m test
 
   # Git stuff
   get-changelog-from-last-tag:

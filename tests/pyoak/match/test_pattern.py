@@ -71,10 +71,10 @@ class PTestChildMultiAttrs(ASTNode):
         ("one_child_val_none_cap", "(PTestParent @child1=None -> child_cap)"),
         ("one_child_val_empty_cap", "(PTestParent @child_tuple=[] -> child_cap)"),
         ("var_any_cap", "(* @child1=(*) -> child_cap @child2 = $child_cap)"),
-        ("one_child_val_arr", "(PTestParent @child_tuple=[(*) (*) *])"),
+        ("one_child_val_arr", "(PTestParent @child_tuple=[(*), (*) *])"),
         (
             "one_child_val_arr_cap",
-            "(PTestParent @child_tuple=[(*) (*) *] -> child_cap)",
+            "(PTestParent @child_tuple=[(*) (*), *] -> child_cap)",
         ),
         (
             "one_child_val_arr_cap_inner",
