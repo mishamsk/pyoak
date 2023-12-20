@@ -118,7 +118,9 @@ def test_file_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert deserialized == FileSource(test_file_rel_path)
 
 
-def test_text_file_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_text_file_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     monkeypatch.chdir(tmp_path)
     test_file_name = "test_file_source.txt"
     test_file_abs_path = tmp_path / test_file_name
@@ -131,22 +133,65 @@ def test_text_file_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
 
     assert s == TextFileSource.from_json(s.to_json())
 
-    # test non-utf8 encoding
-    test_file_rel_path.write_text("Test", encoding="windows-1252")
-    assert s.get_raw() == "Test"
-
     # test pass _raw
-    assert TextFileSource(test_file_rel_path, _raw="init_raw").get_raw() == "init_raw"
+    s_w_r = TextFileSource(test_file_rel_path, _raw="init_raw")
+    assert s_w_r.get_raw() == "init_raw"
 
-    serialized = s.to_json()
+    serialized = s_w_r.to_json()
     # _raw should not be serialized
     assert "_raw" not in serialized
 
-    deserialized = s.from_json(serialized)
+    deserialized = TextFileSource.from_json(serialized)
     # But thanks to Source magic it should restore after deserialization
+    # to the same object as the original with the same uri and path
     assert deserialized is s
     # but it should still be equal to another object with same path
-    assert deserialized == TextFileSource(test_file_rel_path)
+    # but existing _raw
+    assert deserialized == s_w_r
+
+    # Test multiple calls to get_raw with non-existing file
+    s = TextFileSource(test_file_rel_path)
+    assert s.get_raw() is None
+
+    # Now monkeypatch _load_raw function and make sure it is not called again
+    # when we call get_raw
+    called = False
+
+    def _load_raw(self: TextFileSource) -> None:
+        nonlocal called
+        called = True
+
+    with monkeypatch.context() as m:
+        m.setattr(TextFileSource, "_load_raw", _load_raw)
+        s.get_raw()
+
+        assert not called
+
+    # test non-utf8 encoding. By default it should try reading the file once
+    # fail with UnicodeDecodeError, logging an exception and never try again
+
+    # Clear the log
+    caplog.clear()
+
+    # Prepare the file
+    test_file_rel_path.write_text("Тест", encoding="windows-1251")
+
+    # Create a new source object
+    s = TextFileSource(test_file_rel_path)
+
+    # Try to get raw. This should trigger load_raw with UnicodeDecodeError
+    assert s.get_raw() is None
+
+    # Check the log
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelname == "ERROR"
+
+    # Now monkeypatch _load_raw function and make sure it is not called again
+    with monkeypatch.context() as m:
+        m.setattr(TextFileSource, "_load_raw", _load_raw)
+        s.get_raw()
+
+        assert not called
 
 
 def test_entire_file_position() -> None:
