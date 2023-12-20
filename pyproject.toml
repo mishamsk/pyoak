@@ -43,13 +43,14 @@ ruff = "^0.1.8"
 pre-commit = "^3.3.3"
 
 [tool.poetry.group.mypy.dependencies]
-mypy = "^1.5.1"
+mypy = "^1.7.1"
 types-pyyaml = "^6.0.12.11"
+orjson = "^3.9.10"
 
 [tool.poetry.group.test.dependencies]
-pytest = "^7.4.0"
+pytest = "^7.4.3"
 pytest-cov = "^4.1.0"
-deepdiff = "^6.3.1"
+deepdiff = "^6.7.1"
 
 [tool.poetry.group.publish]
 optional = true
@@ -70,7 +71,7 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 
 select = [
     "E",    # pycodestyle errors
@@ -108,12 +109,19 @@ wrap-descriptions = 100
 blank = true
 
 [tool.mypy]
-ignore_missing_imports = true
+ignore_missing_imports = false
 show_column_numbers = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_unused_configs = true
 follow_imports = "normal"
+
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+# Ignore import errors for 3rd party libraries with type stubs
+module = ["deepdiff.*", "msgpack.*", "ruamel.*"]
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["pyoak.*"]
