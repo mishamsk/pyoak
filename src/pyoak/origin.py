@@ -35,8 +35,8 @@ class FQN(ABC):
 # -----------------------------------------------------------------------------
 # --------------------- Source bases & constants ---------------------------
 SOURCE_OPTIMIZED_SERIALIZATION_KEY = "source_optimized_serialization"
-"""Use with (de)serialation functions via `serialization_options` to enable/disable optimized
-serialization of sources.
+"""Use with (de)serialation functions via `serialization_options` to
+enable/disable optimized serialization of sources.
 
 When enabled, source serializaes as a single integer, which is the index
 of the source in the registry of all sources.
@@ -44,7 +44,6 @@ of the source in the registry of all sources.
 Be aware that in order to use this, you need to separately serialize all sources
 without optimization and before deserialization of objects using sources,
 deserialize these and call `Source.load_serialized_sources`
-
 """
 
 
@@ -60,7 +59,6 @@ class Source(DataClassSerializeMixin, FQN):
         source_type: The type of the source. If None, the class name is used.
         source_uri: The URI of the source. If None, the fqn is used.
         _raw: The raw source data. If None, some subclasses provide automatic loading.
-
     """
 
     source_uri: str
@@ -120,7 +118,6 @@ class Source(DataClassSerializeMixin, FQN):
 
         Args:
             data: The list of dictionaries containing the serialized sources.
-
         """
         for source_dict in sources:
             # This will load sources to the registry (in __post_init__)
@@ -137,7 +134,6 @@ class Source(DataClassSerializeMixin, FQN):
 
         Returns:
             The list of dictionaries containing the serialized sources.
-
         """
 
         return [
@@ -308,11 +304,18 @@ NO_ORIGIN = NoOrigin()
 # ----------------------------- Source Classess ---------------------------------
 
 
+class _UnsetClass(str):
+    pass
+
+
+_UNSET = _UnsetClass()
+
+
 @dataclass(frozen=True)
 class SourceSet(Source):
     sources: tuple[Source, ...]
     # Everything else is set automatically
-    source_uri: str = field(default="UNSET", init=False)
+    source_uri: str = field(default=_UNSET, init=False)
     source_type: str = field(default="SourceSet", init=False)
     _raw: None = field(default=None, compare=False, repr=False, init=False)
 
@@ -345,12 +348,12 @@ class MemoryTextSource(TextSource):
     """Represents a text in memory source."""
 
     _raw: str | None = field(default=None, repr=False, compare=False)
-    source_uri: str = field(default="UNSET", kw_only=True)
+    source_uri: str = field(default=_UNSET, kw_only=True)
     # Everything else is set automatically
     source_type: str = field(default="<memory>", init=False)
 
     def __post_init__(self) -> None:
-        if self.source_uri == "UNSET":
+        if self.source_uri is _UNSET:
             object.__setattr__(self, "source_uri", f"{id(self)}")
 
         super().__post_init__()
@@ -365,7 +368,7 @@ class FileSource(Source):
 
     relative_path: Path
     # Everything else is set automatically
-    source_uri: str = field(default="UNSET", init=False)
+    source_uri: str = field(default=_UNSET, init=False)
     source_type: str = field(default="File", init=False)
     _raw: t.Any | None = field(default=None, compare=False, repr=False, init=False)
 
@@ -432,9 +435,12 @@ class TextFileSource(FileSource, TextSource):
         if self.relative_path.exists() and self.relative_path.is_file():
             try:
                 object.__setattr__(self, "_raw", self.relative_path.read_text(encoding="utf-8"))
+                return
             except Exception:
                 logger.exception(f"Failed to read file {self.relative_path}")
-                object.__setattr__(self, "_raw", _FAILED_READ_FILE)
+
+        # Make sure we don't try to read the file again
+        object.__setattr__(self, "_raw", _FAILED_READ_FILE)
 
     def get_raw(self) -> str | None:
         if self._raw is None:
@@ -452,8 +458,8 @@ class TextFileSource(FileSource, TextSource):
 
 @dataclass(frozen=True)
 class EntireSourcePosition(Position):
-    """A singelton class representing a position with boundaries indicating whole source was
-    used."""
+    """A singelton class representing a position with boundaries indicating
+    whole source was used."""
 
     _instance: t.ClassVar[EntireSourcePosition | None] = None
 
@@ -544,8 +550,8 @@ class CodePoint(DataClassSerializeMixin):
         return f"CodePoint({self.line=}, {self.column=}, {self.index=})"
 
     def rebase(self, base: CodePoint) -> CodePoint:
-        """Recalculate code point position assuming it was relative to a given base starting point
-        and return as CodePoint."""
+        """Recalculate code point position assuming it was relative to a given
+        base starting point and return as CodePoint."""
         if self.line == 1:
             column = self.column + base.column
         else:
@@ -561,7 +567,6 @@ class CodeRange(Position):
     Attributes:
         start (CodePoint): The start point of the range (the first character included in the range).
         end (CodePoint): The end point of the range (the first character after the code that's part of the range).
-
     """
 
     start: CodePoint
@@ -572,7 +577,8 @@ class CodeRange(Position):
             raise ValueError(f"Start point {self.start} must be <= end point {self.end}")
 
     def overlaps(self, other: CodeRange) -> bool:
-        """Returns True if the two ranges overlap, including when ther are adjacent."""
+        """Returns True if the two ranges overlap, including when ther are
+        adjacent."""
         return self.end >= other.start and self.start <= other.end
 
     def __contains__(self, other: CodeRange) -> bool:
@@ -627,7 +633,6 @@ def get_code_range(
 
     Returns:
         CodeRange: code range.
-
     """
 
     return CodeRange(
@@ -680,7 +685,6 @@ class XMLFileOrigin(Origin):
     """Represents an single tag, attribute or tag text value in an XML file.
 
     get_raw() always returns None.
-
     """
 
     source: Source
@@ -716,10 +720,11 @@ class CodeOrigin(Origin):
 
 @dataclass(frozen=True)
 class GeneratedCodeOrigin(CodeOrigin):
-    """Represents a code origin that was generated by the parser, thus have a source.
+    """Represents a code origin that was generated by the parser, thus have a
+    source.
 
-    Position is always EMPTY_CODE_RANGE (0-0 index). get_raw() always returns None.
-
+    Position is always EMPTY_CODE_RANGE (0-0 index). get_raw() always
+    returns None.
     """
 
     source: Source
@@ -734,8 +739,8 @@ class GeneratedCodeOrigin(CodeOrigin):
 
 
 def get_xml_origin(source_file_or_src: Path | Source, xpath: str) -> XMLFileOrigin:
-    """Returns an XML origin from the given FileSource or source file path (creating FileSource on
-    the fly) and xpath."""
+    """Returns an XML origin from the given FileSource or source file path
+    (creating FileSource on the fly) and xpath."""
     if isinstance(source_file_or_src, Path):
         source: Source = FileSource(source_file_or_src)
     else:
@@ -776,12 +781,11 @@ def merge_origins(*origins: Origin) -> Origin:
 
 
 def concat_origins(origin: Origin, *origins: Origin) -> Origin:
-    """Similar to merge_origins but uses addition which in case of CodeOrigin may merge overlapping
-    ranges into a single CodeOrigin.
+    """Similar to merge_origins but uses addition which in case of CodeOrigin
+    may merge overlapping ranges into a single CodeOrigin.
 
     Returns:
         Origin: new origin.
-
     """
     if len(origins) == 0:
         return origin
