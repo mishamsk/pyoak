@@ -140,8 +140,12 @@ def test_json_serialize() -> None:
 
 
 def test_no_extras_serialize_funcs() -> None:
-    assert not hasattr(SerializeTestClass, "from_yaml")
-    assert not hasattr(SerializeTestClass, "to_yaml")
+    try:
+        import yaml  # noqa: F401
+    except ImportError:
+        assert not hasattr(SerializeTestClass, "from_yaml")
+        assert not hasattr(SerializeTestClass, "to_yaml")
+
     assert not hasattr(SerializeTestClass, "from_msgpck")
     assert not hasattr(SerializeTestClass, "to_msgpck")
     assert hasattr(SerializeTestClass, "from_json")

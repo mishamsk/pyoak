@@ -33,21 +33,21 @@ try:
 
     def json_dumper_to_byte(value: dict[str, Any], indent: bool = False) -> bytes:
         if indent:
-            return orjson.dumps(  # type: ignore
+            return orjson.dumps(
                 value,
                 option=orjson.OPT_INDENT_2,
             )
         else:
-            return orjson.dumps(value)  # type: ignore
+            return orjson.dumps(value)
 
     def json_dumper_to_str(value: dict[str, Any], indent: bool = False) -> str:
         if indent:
-            return orjson.dumps(  # type: ignore
+            return orjson.dumps(
                 value,
                 option=orjson.OPT_INDENT_2,
             ).decode(encoding="utf-8")
         else:
-            return orjson.dumps(value).decode(encoding="utf-8")  # type: ignore
+            return orjson.dumps(value).decode(encoding="utf-8")
 
     class OrjsonDialect(Dialect):
         serialization_strategy = {  # noqa: RUF012
@@ -137,6 +137,8 @@ TYPE_KEY = "__type"
 
 
 class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
+    __slots__ = ()
+
     __serialization_options: ClassVar[dict[str, Any]] = {}
     __mashumaro_dialect: ClassVar[Type[Dialect] | None] = None
 
@@ -207,15 +209,17 @@ class DataClassSerializeMixin(DataClassDictMixin, SerializableType):
             return cast(T, clazz.from_dict(value))
 
     def __init_subclass__(cls, **kwargs: Any):
-        if cls.__name__ in TYPES:
-            package = "Unknown"
-            module = inspect.getmodule(TYPES[cls.__name__])
-            if module is not None:
-                package = str(module.__package__)
+        if TYPES.get(cls.__name__) is not None:
+            # We are not allowed to redefine a class that is already defined in a different package
+            # except for one case - when dataclass re-creates the class with __slots__.
+            new_module = inspect.getmodule(cls)
+            old_module = inspect.getmodule(TYPES[cls.__name__])
 
-            raise ValueError(
-                f"DataClassSerializeMixin subclass <{cls.__name__}> is already defined in package <{package}>. Please use a different name."
-            )
+            if new_module is not old_module:
+                raise ValueError(
+                    f"DataClassSerializeMixin subclass <{cls.__name__}> is already defined "
+                    f"in {old_module!s}. Please use a different name."
+                )
 
         TYPES[cls.__name__] = cls
         return super().__init_subclass__(**kwargs)
