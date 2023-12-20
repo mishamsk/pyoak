@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import Field as DataClassField
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from itertools import repeat
-from typing import Any, Iterable, cast
+from typing import Any, ClassVar, Iterable, cast
 
 import pytest
 from deepdiff import DeepDiff
@@ -15,6 +15,7 @@ from pyoak.error import (
     ASTNodeRegistryCollisionError,
     ASTNodeReplaceError,
     ASTNodeReplaceWithError,
+    InvalidTypes,
 )
 from pyoak.match.error import ASTXpathDefinitionError
 from pyoak.match.xpath import ASTXpath
@@ -24,7 +25,9 @@ from pyoak.node import (
     ASTSerializationDialects,
 )
 from pyoak.origin import NO_ORIGIN, CodeOrigin, MemoryTextSource, Origin, get_code_range
-from pyoak.serialize import TYPE_KEY
+from pyoak.serialize import TYPE_KEY, DataClassSerializeMixin
+
+from tests.pyoak.conftest import ConfigFixtureProtocol
 
 Field = DataClassField[Any]
 
@@ -50,6 +53,8 @@ class SubChildNode(ChildNode):
 @dataclass
 class OtherNode(ASTNode):
     attr: str
+
+    origin: Origin = field(default=NO_ORIGIN, kw_only=True)
 
 
 @dataclass
@@ -78,15 +83,37 @@ class SubParentNode(ParentNode):
 
 @dataclass
 class StaticFieldGettersTest(ASTNode):
+    non_compare_attr: str = field(compare=False)
+    non_init_attr: str = field(init=False, default="default")
     attr: str
     _hidden_attr: str
     child: ASTNode
     optional_child: ASTNode | None
-    child_list: tuple[ASTNode, ...]
-    optional_child_list: tuple[ASTNode, ...]
+    child_seq: tuple[ASTNode, ...]
     _not_hidden_child: ASTNode
-    non_compare_attr: str = field(compare=False)
-    non_init_attr: str = field(init=False)
+
+
+@dataclass
+class Custom(DataClassSerializeMixin):
+    foo: int = 1
+
+
+@dataclass
+class RuntimeTypeCheckNode(ASTNode):
+    clsvar: ClassVar[str] = "test"
+    str_prop: str
+    tuple_prop: tuple[str, ...]
+    cust_prop: Custom
+    child: ChildNode
+    child_seq: tuple[ASTNode, ...]
+    initvar: InitVar[int]
+
+    origin: Origin = field(default=NO_ORIGIN, kw_only=True)
+
+    def __post_init__(
+        self, initvar: int, ensure_unique_id: bool, create_as_duplicate: bool, create_detached: bool
+    ) -> None:
+        return super().__post_init__(ensure_unique_id, create_as_duplicate, create_detached)
 
 
 origin = CodeOrigin(MemoryTextSource("test"), get_code_range(0, 1, 0, 3, 1, 3))
@@ -181,8 +208,7 @@ def test_get_child_fields() -> None:
     assert _get_fname_set(StaticFieldGettersTest.get_child_fields().keys()) == {
         "child",
         "optional_child",
-        "child_list",
-        "optional_child_list",
+        "child_seq",
         "_not_hidden_child",
     }
 
@@ -960,6 +986,48 @@ def test_duplicate() -> None:
     dup_parent.detach()
 
 
+def test_runtime_type_checks(pyoak_config: ConfigFixtureProtocol) -> None:
+    # Without runtime checks
+    with pyoak_config(runtime_checks=False):
+        assert RuntimeTypeCheckNode(
+            str_prop=1,  # type: ignore[arg-type]
+            tuple_prop="s",  # type: ignore[arg-type]
+            cust_prop=True,  # type: ignore[arg-type]
+            child=OtherNode("1"),  # type: ignore[arg-type]
+            child_seq=[ChildNode("1")],  # type: ignore[arg-type]
+            initvar=1,
+        )
+
+    # With runtime checks
+    with pyoak_config(runtime_checks=True):
+        with pytest.raises(InvalidTypes) as excinfo:
+            _ = RuntimeTypeCheckNode(
+                str_prop=1,  # type: ignore[arg-type]
+                tuple_prop="s",  # type: ignore[arg-type]
+                cust_prop=True,  # type: ignore[arg-type]
+                child=OtherNode("1"),  # type: ignore[arg-type]
+                child_seq=[ChildNode("1")],  # type: ignore[arg-type]
+                initvar=1,
+            )
+
+        assert _get_fname_set(excinfo.value.invalid_fields) == {
+            "str_prop",
+            "tuple_prop",
+            "cust_prop",
+            "child",
+            "child_seq",
+        }
+
+        @dataclass
+        class SNode(ASTNode):
+            ninit: str = field(init=False, default=1)  # type: ignore[assignment]
+
+        with pytest.raises(InvalidTypes) as excinfo:
+            _ = SNode(origin=NO_ORIGIN)
+
+        assert _get_fname_set(excinfo.value.invalid_fields) == {"ninit"}
+
+
 def test_serialization_and_equality() -> None:
     ch_nodes: list[ChildNode] = []
     ch_count = 10
@@ -1217,11 +1285,11 @@ def test_is_equal() -> None:
 
 def test_to_content_dict() -> None:
     single_child = ChildNode("single_child", origin=origin)
-    child_list = ChildNode("child_list1", origin=origin)
+    child_seq = ChildNode("child_list1", origin=origin)
     parent = ParentNode(
         attr="Parent",
         single_child=single_child,
-        child_seq=(child_list,),
+        child_seq=(child_seq,),
         not_a_child_seq=("1",),
         origin=origin,
     )
@@ -1230,6 +1298,71 @@ def test_to_content_dict() -> None:
         attr="Parent",
         not_a_child_seq=("1",),
     )
+
+
+def test_iter_child_fields(clean_ser_types) -> None:
+    ch_nodes: list[ASTNode] = []
+    ch_count = 10
+    for i in range(ch_count):
+        ch_nodes.append(ChildNode(str(i), origin=origin))
+
+    parent = ParentNode(
+        attr="Test",
+        single_child=ch_nodes[0],
+        child_seq=tuple(ch_nodes[1:]),
+        not_a_child_seq=(),
+        origin=origin,
+    )
+
+    assert list(parent.iter_child_fields()) == [
+        (
+            ch_nodes[0],
+            ParentNode.__dataclass_fields__["single_child"],
+        ),
+        (
+            tuple(ch_nodes[1:]),
+            ParentNode.__dataclass_fields__["child_seq"],
+        ),
+        (
+            None,
+            ParentNode.__dataclass_fields__["restricted_child"],
+        ),
+    ]
+
+    assert list(parent.iter_child_fields(sort_keys=True)) == [
+        (
+            tuple(ch_nodes[1:]),
+            ParentNode.__dataclass_fields__["child_seq"],
+        ),
+        (
+            None,
+            ParentNode.__dataclass_fields__["restricted_child"],
+        ),
+        (
+            ch_nodes[0],
+            ParentNode.__dataclass_fields__["single_child"],
+        ),
+    ]
+
+    # iter_child_fields is compiled on the fly
+    # Test codegen of a parent class doesn't break the subclasses
+    @dataclass
+    class BaseNode(ASTNode):
+        child: ChildNode
+
+        origin: Origin = field(default=NO_ORIGIN, kw_only=True)
+
+    @dataclass
+    class SubNode(BaseNode):
+        child_seq: tuple[ChildNode, ...]
+
+    # trigger codegen for get_properties
+    _ = list(BaseNode(ChildNode("1")).iter_child_fields())
+
+    assert list(SubNode(ChildNode("1"), (ChildNode("2"),)).iter_child_fields()) == [
+        (ChildNode("1"), SubNode.__dataclass_fields__["child"]),
+        ((ChildNode("2"),), SubNode.__dataclass_fields__["child_seq"]),
+    ]
 
 
 @dataclass(slots=True)
@@ -1490,3 +1623,188 @@ def test_no_origin_serialization() -> None:
     node = ChildNode("test", origin=NO_ORIGIN, create_detached=True)
 
     assert ChildNode.from_json(node.to_json()) == node
+
+
+def test_get_properties() -> None:
+    all_props = {
+        "non_compare_v": StaticFieldGettersTest.__dataclass_fields__["non_compare_attr"],
+        "default": StaticFieldGettersTest.__dataclass_fields__["non_init_attr"],
+        "attr_v": StaticFieldGettersTest.__dataclass_fields__["attr"],
+        # "hidden_v": StaticFieldGettersTest.__dataclass_fields__["_hidden_attr"],
+    }
+
+    node = StaticFieldGettersTest(
+        attr="attr_v",
+        _hidden_attr="hidden_v",
+        child=ChildNode("1"),
+        optional_child=None,
+        child_seq=(),
+        _not_hidden_child=ChildNode("2"),
+        non_compare_attr="non_compare_v",
+        origin=origin,
+    )
+
+    assert list(node.get_properties()) == list(all_props.items())
+    assert list(node.get_properties(sort_keys=True)) != list(all_props.items())
+    assert dict(node.get_properties(sort_keys=True)) == all_props
+
+    assert list(node.get_properties(skip_id=False)) == [
+        (node.id, StaticFieldGettersTest.__dataclass_fields__["id"]),
+        (node.content_id, StaticFieldGettersTest.__dataclass_fields__["content_id"]),
+        *list(all_props.items()),
+    ]
+    assert list(node.get_properties(skip_id=False, sort_keys=True)) != [
+        (node.id, StaticFieldGettersTest.__dataclass_fields__["id"]),
+        (node.content_id, StaticFieldGettersTest.__dataclass_fields__["content_id"]),
+        *list(all_props.items()),
+    ]
+    assert dict(node.get_properties(skip_id=False, sort_keys=True)) == {
+        node.id: StaticFieldGettersTest.__dataclass_fields__["id"],
+        node.content_id: StaticFieldGettersTest.__dataclass_fields__["content_id"],
+        **all_props,
+    }
+
+    assert list(node.get_properties(skip_origin=False)) == [
+        (origin, StaticFieldGettersTest.__dataclass_fields__["origin"]),
+        *list(all_props.items()),
+    ]
+    assert list(node.get_properties(skip_origin=False, sort_keys=True)) != [
+        (origin, StaticFieldGettersTest.__dataclass_fields__["origin"]),
+        *list(all_props.items()),
+    ]
+    assert dict(node.get_properties(skip_origin=False, sort_keys=True)) == {  # type: ignore[misc]
+        origin: StaticFieldGettersTest.__dataclass_fields__["origin"],
+        **all_props,
+    }
+
+    no_non_compare = all_props.copy()
+    no_non_compare.pop("non_compare_v")
+
+    assert list(node.get_properties(skip_non_compare=True)) == list(no_non_compare.items())
+    assert list(node.get_properties(skip_non_compare=True, sort_keys=True)) != list(
+        no_non_compare.items()
+    )
+    assert dict(node.get_properties(skip_non_compare=True, sort_keys=True)) == no_non_compare
+
+    no_non_init = all_props.copy()
+    no_non_init.pop("default")
+
+    assert list(node.get_properties(skip_non_init=True)) == list(no_non_init.items())
+    assert list(node.get_properties(skip_non_init=True, sort_keys=True)) != list(
+        no_non_init.items()
+    )
+    assert dict(node.get_properties(skip_non_init=True, sort_keys=True)) == no_non_init
+
+    # get_properties code is compiled on the fly on the first call
+    # Test codegen of a parent class doesn't break the subclasses
+    @dataclass
+    class BaseNode(ASTNode):
+        attr: str
+
+        origin: Origin = field(default=NO_ORIGIN, kw_only=True)
+
+    @dataclass
+    class SubNode(BaseNode):
+        sattr: str
+
+    # trigger codegen for get_properties
+    _ = list(BaseNode("1").get_properties())
+
+    assert list(SubNode("1", "2").get_properties()) == [
+        ("1", SubNode.__dataclass_fields__["attr"]),
+        ("2", SubNode.__dataclass_fields__["sattr"]),
+    ]
+
+
+def test_get_child_nodes(clean_ser_types) -> None:
+    child = ChildNode("1")
+    child_dup = child.duplicate()
+
+    mid_node = ParentNode(
+        attr="Mid",
+        single_child=child,
+        child_seq=(),
+        not_a_child_seq=(),
+    )
+
+    parent = ParentNode(
+        attr="Test",
+        single_child=mid_node,
+        # use the same child node twice
+        child_seq=(child_dup,),
+        not_a_child_seq=(),
+        origin=origin,
+    )
+
+    assert list(parent.get_child_nodes()) == [mid_node, child_dup]
+    assert list(parent.get_child_nodes(sort_keys=True)) == [child_dup, mid_node]
+
+    # get_child_nodes code is compiled on the fly on the first call
+    # Test codegen of a parent class doesn't break the subclasses
+    @dataclass
+    class BaseNode(ASTNode):
+        child: ChildNode
+
+        origin: Origin = field(default=NO_ORIGIN, kw_only=True)
+
+    @dataclass
+    class SubNode(BaseNode):
+        schild: ChildNode
+
+    # trigger codegen for get_child_nodes
+    _ = list(BaseNode(ChildNode("1")).get_child_nodes())
+
+    assert list(SubNode(ChildNode("1"), ChildNode("2")).get_child_nodes()) == [
+        ChildNode("1"),
+        ChildNode("2"),
+    ]
+
+
+def test_get_child_nodes_with_field(clean_ser_types) -> None:
+    child = ChildNode("1")
+    child_dup = child.duplicate()
+
+    mid_node = ParentNode(
+        attr="Mid",
+        single_child=child,
+        child_seq=(),
+        not_a_child_seq=(),
+    )
+
+    parent = ParentNode(
+        attr="Test",
+        single_child=mid_node,
+        # use the same child node twice
+        child_seq=(child_dup,),
+        not_a_child_seq=(),
+        origin=origin,
+    )
+
+    assert list(parent.get_child_nodes_with_field()) == [
+        (mid_node, ParentNode.__dataclass_fields__["single_child"], None),
+        (child_dup, ParentNode.__dataclass_fields__["child_seq"], 0),
+    ]
+    assert list(parent.get_child_nodes_with_field(sort_keys=True)) == [
+        (child_dup, ParentNode.__dataclass_fields__["child_seq"], 0),
+        (mid_node, ParentNode.__dataclass_fields__["single_child"], None),
+    ]
+
+    # get_child_nodes_with_field code is compiled on the fly on the first call
+    # Test codegen of a parent class doesn't break the subclasses
+    @dataclass
+    class BaseNode(ASTNode):
+        child: ChildNode
+
+        origin: Origin = field(default=NO_ORIGIN, kw_only=True)
+
+    @dataclass
+    class SubNode(BaseNode):
+        schild: ChildNode
+
+    # trigger codegen for get_child_nodes_with_field
+    _ = list(BaseNode(ChildNode("1")).get_child_nodes_with_field())
+
+    assert list(SubNode(ChildNode("1"), ChildNode("2")).get_child_nodes_with_field()) == [
+        (ChildNode("1"), SubNode.__dataclass_fields__["child"], None),
+        (ChildNode("2"), SubNode.__dataclass_fields__["schild"], None),
+    ]
