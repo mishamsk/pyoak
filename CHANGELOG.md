@@ -35,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - TBD
 
+## [3.0.0a2]
+
+### ✨ Changed
+
+- Improve parser error formatting
+
 ## [3.0.0a1]
 
 This is the first early alpha of the next version that combines the best of v1 and v2. We are expanding core features, focusing on performance for huge trees, and eliminating everything that can be easily added externally.
