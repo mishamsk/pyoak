@@ -4,7 +4,7 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Test Status](https://github.com/mishamsk/pyoak/actions/workflows/dev.yml/badge.svg)](https://github.com/mishamsk/pyoak/actions/workflows/dev.yml)
 
-Commerial-grade, well tested, documented and typed Python library for modeling, building, traversing, transforming, transferring and even pattern matching abstract syntax trees (AST) for arbtirary languages.
+Commerial-grade, well tested, documented, pure Python and fully typed library for modeling, building, traversing, transforming, transferring and even pattern matching abstract syntax trees (AST) for arbtirary languages. Bonus feature: almost no dependencies!
 
 ## Features<!-- omit from toc -->
 
@@ -12,14 +12,13 @@ Commerial-grade, well tested, documented and typed Python library for modeling, 
 * 📝 "Magic", auto-maintained node registry, allowing node cross-referncing and retrievel
 * 📚 Source origin tracking for each node
 * 📺 Zero-setup pretty printing using [Rich](https://github.com/willmcgugan/rich)
-* 💾 json, msgpack, yaml or plain dict (de)serialization
+* 💾 json, msgpack (optional), yaml (optional) or plain dict (de)serialization
 * 🏃‍♀️ AST traversal: depth-first or breadth-first, top down or bottom up, with filtering and pruning
 * 🎯 Xpath-like AST search (top to the node)
 * 👯‍♂️ Node pattern matching with ability to capture specific sub-trees or attributes
 * ... and more!
 
 ## Feature Roadmap<!-- omit from toc -->
-* Strict-mode with runtime field value type checking
 * Frozen version of ASTNode
 * ~~rustify some parts for performance~~ well, that's too far-fetched
 
@@ -333,19 +332,19 @@ if xpath.match(root_node, some_node):
 
 **Syntax**
 
-Each path is in the format `@parent_field_name[index]type_name` and is separated by a slash.
+Each path is in the format `@parent_field_name[index]type_name_or_pattern` and is separated by a slash.
 
 - The slash is optional at the start of the XPath. If omitted, it is the same as using `//the rest of the path`.
 - `//` is a wildcard (anywhere) that matches any path.
 - `@parent_field_name` and `index` are optional.
-- `type_name` is optional, except for the last path in the XPath.
+- `type_name_or_pattern` is optional, except for the last path in the XPath (which must be type, not pattern).
 
 Types are instance comparisons, so any subclass matches a type.
 
 **More examples**
 
 - `CallExpr/@arguments[0]Id` matches the first argument of a call expression at any level in the tree, which is of type `Id`.
-- `CallExpr/@arguments[*]Id` matches any argument of type `Id`.
+- `(CallExpr @func_name="math.*")/@arguments[*]Id` similar to the above, but matches any call expression whose function name matches the pattern `math.*`.
 - `@arguments[*]CallExpr` matches any CallExpr as long as it is an argument (stored in a field with the said name) of a parent expression.
 - `CallExpr` matches any call expression at any level in the tree.
 
