@@ -35,6 +35,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - TBD
 
+## [3.0.0a1]
+
+This is the first early alpha of the next version that combines the best of v1 and v2. We are expanding core features, focusing on performance for huge trees, and eliminating everything that can be easily added externally.
+
+This version already includes significant changes and improvements, including the removal of certain dependencies (most notably - pattern parser is now bespoke and lark is not a dependency anymore), backporting of method code generation from v2, and several breaking changes.
+
+### 🚀 Added
+
+- Unified grammar errors under single ASTXpathOrPatternDefinitionError
+- Added ability to pass types to check against when building Xpath and patterns
+- Backported remaining node tests
+- Backported codegen and support for slots
+- Added optional comma to sequence pattern
+
+### ✨ Changed
+
+- Rewrote xpath/pattern to bespoke parser
+- breaking: backport strict typing to ast node
+- backport opt-in runtime type checks
+- Moved helpers, visitors to separate modules
+- NodeMatcher.from_pattern now raises on error, similar to ASTXPath
+- Backported repr_fn for ASTNode and separate config module
+- Backported get_property_fields API (plain Field iterable)
+- Backported sort_keys in various field getter APIs
+- Allowed slotted DataClassSerializeMixin subclasses
+
+### 🐛 Fixed
+
+- TextFileSource no longer tries reading from non-existent file more than once
+
+### 🔥 Removed
+
+- Removed lark as a dependency
+- Removed ASTXpathDefinitionError and ASTPatternDefinitionError
+- Removed old, string based xpath & calculate_xpath API
+- Removed ASTTransormer
+
+### 📖 Documentation
+
+- Updated readme
+
+### 🛠️ Internal
+
+- Allow pre-releases in bump2version
+- Backported and improved benchmarks from v2
+- Backported typing modules from v2
+- Updated minimum development dependencies
+- Stricter mypy checks and ensured ruff targets py3.10
+- Switched to taskdev from makefile
+- Added sentinel for unset source_uris
+- Added subclassing violation test and slotted subclass test
+- Added TextFileSource failed file read test
+
 ## [1.2.0]
 
 This mainly a backport of enhanced XPath & Pattern Matcher from 2.0.0, but also makes serialization dependencies options as well as removes the ability of TextFileSources to guess file encoding (and chardet dependency with it).
