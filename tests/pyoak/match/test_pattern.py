@@ -93,23 +93,31 @@ def test_correct_pattern_grammar(rule: str, pattern_def: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "rule, pattern_def",
+    "rule, pattern_def, expected_msg",
     [
-        ("any_and_multi_class", "(* | PTestChild1)"),
         (
-            "two_attr_cap_one_name",
-            '(PTestParent @foo="val" -> same_val  bar="barval" -> same_val])',
+            "##any_and_multi_class",
+            "(* | PTestChild1)",
+            "Expected: ')' (pattern end), got: '|' (class name separator)",
         ),
         (
-            "two_attr_var_before_cap",
+            "##two_attr_cap_one_name",
+            '(PTestParent @foo="val" -> same_val  @bar="barval" -> same_val])',
+            "Capture name <same_val> used more than once",
+        ),
+        (
+            "##two_attr_var_before_cap",
             '(PTestParent @foo= $same_val  bar="barval" -> same_val])',
+            "Pattern uses match variable <same_val> before it was captured",
         ),
     ],
-    ids=lambda p: f"test_pattern_{p}" if not p.startswith("(") else "",
+    # will effectively use the rule name as the test name
+    ids=lambda p: f"test_pattern_{p[2:]}" if p.startswith("##") else "",
 )
-def test_incorrect_pattern_grammar(rule: str, pattern_def: str) -> None:
-    res, _ = validate_pattern(pattern_def)
+def test_incorrect_pattern_grammar(rule: str, pattern_def: str, expected_msg: str) -> None:
+    res, msg = validate_pattern(pattern_def)
     assert not res
+    assert expected_msg in msg
 
 
 def test_props_match() -> None:
@@ -244,10 +252,10 @@ def test_sequence_var_match() -> None:
         origin=origin,
     )
 
-    macher, msg = NodeMatcher.from_pattern(
+    macher = NodeMatcher.from_pattern(
         "(PTestParent @child_tuple=[(* @foo -> cap_foo) -> cap $cap *])"
     )
-    assert macher is not None, msg
+    assert macher
 
     ok, match_dict = macher.match(node)
     assert ok
@@ -261,22 +269,22 @@ def test_sequence_empty_match() -> None:
         origin=origin,
     )
 
-    macher, msg = NodeMatcher.from_pattern("(PTestParent @child_tuple=[(PTestChild1) -> cap *])")
-    assert macher is not None, msg
+    macher = NodeMatcher.from_pattern("(PTestParent @child_tuple=[(PTestChild1) -> cap *])")
+    assert macher
 
     ok, match_dict = macher.match(node)
     assert not ok
     assert not match_dict
 
-    macher, msg = NodeMatcher.from_pattern("(PTestParent @child_tuple=[* -> cap_empty_seq])")
-    assert macher is not None, msg
+    macher = NodeMatcher.from_pattern("(PTestParent @child_tuple=[* -> cap_empty_seq])")
+    assert macher
 
     ok, match_dict = macher.match(node)
     assert ok
     assert match_dict["cap_empty_seq"] == ()
 
-    macher, msg = NodeMatcher.from_pattern("(PTestParent @child_tuple=[] -> cap_empty_node)")
-    assert macher is not None, msg
+    macher = NodeMatcher.from_pattern("(PTestParent @child_tuple=[] -> cap_empty_node)")
+    assert macher
 
     ok, match_dict = macher.match(node)
     assert ok

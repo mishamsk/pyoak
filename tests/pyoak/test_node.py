@@ -17,7 +17,7 @@ from pyoak.error import (
     ASTNodeReplaceWithError,
     InvalidTypes,
 )
-from pyoak.match.error import ASTXpathDefinitionError
+from pyoak.match.error import ASTXpathOrPatternDefinitionError
 from pyoak.match.xpath import ASTXpath
 from pyoak.node import (
     AST_SERIALIZE_DIALECT_KEY,
@@ -1545,7 +1545,7 @@ def test_find() -> None:
     assert root.find(ASTXpath("//ChildNode")) is ch
     assert root.find("/OtherNode") is None
 
-    with pytest.raises(ASTXpathDefinitionError):
+    with pytest.raises(ASTXpathOrPatternDefinitionError):
         root.find("NonExistentClass")
 
 
@@ -1581,7 +1581,7 @@ def test_findall() -> None:
     }
     assert len(list(root.findall("/OtherNode"))) == 0
 
-    with pytest.raises(ASTXpathDefinitionError):
+    with pytest.raises(ASTXpathOrPatternDefinitionError):
         next(root.findall("NonExistentClass"))
 
 
