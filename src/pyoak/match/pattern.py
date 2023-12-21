@@ -3,28 +3,20 @@ from __future__ import annotations
 import logging
 import re
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Any,
     Iterable,
     Mapping,
     Sequence,
-    cast,
 )
 
-from lark import Lark, Tree, UnexpectedInput
-from lark.visitors import Interpreter
-
 from ..node import ASTNode
-from .error import ASTPatternDefinitionError
-from .grammar import PATTERN_DEF_GRAMMAR
-from .helpers import check_and_get_ast_node_type
+from .error import ASTXpathOrPatternDefinitionError
 
 if TYPE_CHECKING:
     pass
-
-pattern_def_parser = Lark(grammar=PATTERN_DEF_GRAMMAR, start="tree", parser="lalr")
 
 
 logger = logging.getLogger(__name__)
@@ -98,7 +90,7 @@ class VarMatcher(BaseMatcher):
 
     def _match(self, value: Any, ctx: _Vars) -> _MatchRes:
         if self.var_name not in ctx:
-            raise ASTPatternDefinitionError(
+            raise ASTXpathOrPatternDefinitionError(
                 f"Pattern uses match variable {self.var_name} before it was captured"
             )
 
@@ -202,248 +194,119 @@ class NodeMatcher(BaseMatcher):
         return (True, ret_vars)
 
     @classmethod
-    def from_pattern(cls, pattern_def: str) -> tuple[NodeMatcher | None, str]:
-        """Create a NodeMatcher from a pattern definition."""
+    def from_pattern(
+        cls, pattern_def: str, types: Mapping[str, type[Any]] | None = None
+    ) -> NodeMatcher:
+        """Create a NodeMatcher from a pattern definition.
+
+        Args:
+            pattern_def: The pattern definition to parse.
+            types: An optional mapping of AST class names to their types. If not provided,
+                the default mapping from `pyoak.serialize` is used.
+
+        Returns:
+            A NodeMatcher instance.
+
+        Raises:
+            ASTXpathOrPatternDefinitionError: Raised if the pattern definition is incorrect
+
+        """
         if pattern_def in _MATCHER_CACHE:
-            return _MATCHER_CACHE[pattern_def], "Cached matcher"
+            return _MATCHER_CACHE[pattern_def]
+
+        if types is None:
+            # Only import if needed
+            from ..serialize import TYPES
+
+            types = TYPES
+
+        # Import here to avoid circular imports
+        from .parser import Parser
 
         try:
-            parsed_pattern_defs = pattern_def_parser.parse(pattern_def)
-        except UnexpectedInput as e:
-            return (
-                None,
-                f"Incorrect pattern definition. Context:\n{e.get_context(pattern_def)}",
-            )
-        except Exception:
-            return None, "Incorrect pattern definition. Unexpected error"
-
-        try:
-            matcher = cast(
-                NodeMatcher, PatternDefInterpreter().visit(cast(Tree[str], parsed_pattern_defs))
-            )
-        except ASTPatternDefinitionError as e:
-            return None, e.message
+            matcher = Parser(types).parse_pattern(pattern_def)
+        except ASTXpathOrPatternDefinitionError:
+            raise
         except Exception as e:
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f"Unexpected error during pattern definition grammar generation: {e}")
-            return None, "Incorrect pattern definition. Unexpected error"
+
+            raise ASTXpathOrPatternDefinitionError(
+                "Failed to parse a tree pattern due to internal error. Please report it!"
+            ) from e
 
         _MATCHER_CACHE[pattern_def] = matcher
-        return matcher, "Valid pattern definition"
-
-
-class PatternDefInterpreter(Interpreter[str, BaseMatcher]):
-    def __init__(self) -> None:
-        super().__init__()
-
-        self._captures_seen: set[str] = set()
-
-    def _check_unique_and_get_capture(self, child: str | Tree[str]) -> str | None:
-        if not isinstance(child, Tree) or child.data != "capture":
-            return None
-
-        name = str(child.children[0])
-
-        if name in self._captures_seen:
-            raise ASTPatternDefinitionError(f"Capture name <{name}> used more than once")
-
-        self._captures_seen.add(name)
-
-        return name
-
-    def reset(self) -> None:
-        self._captures_seen = set()
-
-    def tree(self, tree: Tree[str]) -> NodeMatcher:
-        # First parse class_spec which will have 1+ ASTNode types or ANY
-        assert isinstance(tree.children[0], Tree)
-        assert tree.children[0].data == "class_spec"
-
-        match_types: list[type[ASTNode]] = []
-        class_names = cast(list[str], tree.children[0].children)
-
-        for class_name in class_names:
-            if class_name == "*":
-                match_types = [ASTNode]
-                break
-
-            type_, msg = check_and_get_ast_node_type(class_name)
-            if type_ is None:
-                raise ASTPatternDefinitionError(msg)
-
-            match_types.append(type_)
-
-        # Then parse field_spec which will have 1+ field names and matchers
-        content: list[tuple[str, BaseMatcher]] = []
-
-        for child in tree.children[1:]:
-            if isinstance(child, Tree):
-                assert child.data == "field_spec"
-                content.append((str(child.children[0]), self.visit(child)))
-            else:
-                raise RuntimeError(f"Unexpected child in tree rule: {child}")
-
-        return NodeMatcher(types=tuple(match_types), content=tuple(content))
-
-    def field_spec(self, tree: Tree[str]) -> BaseMatcher:
-        if len(tree.children) == 1:
-            # Any value without capture
-            return AnyMatcher()
-
-        # Second may be capture or value
-        name = self._check_unique_and_get_capture(tree.children[1])
-
-        if name is not None:
-            # Any value with capture
-            return AnyMatcher(name=name)
-
-        val = tree.children[1]
-        assert isinstance(val, Tree)
-
-        matcher = self.visit(val)
-
-        if len(tree.children) > 2:
-            # Has capture
-            name = self._check_unique_and_get_capture(tree.children[2])
-
-            if name is None:
-                raise RuntimeError("Unexpected child in field_spec rule")
-
-            return replace(matcher, name=name)
-
         return matcher
 
-    def sequence(self, tree: Tree[str]) -> SequenceMatcher | ValueMatcher:
-        matchers: list[BaseMatcher] = []
-        last_matcher: BaseMatcher | None = None
 
-        for child in tree.children:
-            if isinstance(child, Tree):
-                # Value or capture
-                capture_name = self._check_unique_and_get_capture(child)
-
-                if capture_name is not None:
-                    if last_matcher is None:
-                        raise RuntimeError("Unexpected capture in sequence rule.")
-
-                    last_matcher = replace(last_matcher, name=capture_name)
-                    continue
-
-                if last_matcher is not None:
-                    matchers.append(last_matcher)
-
-                last_matcher = self.visit(child)
-            else:
-                # Must be ANY or ","
-                if child == ",":
-                    continue
-
-                assert child == "*"
-
-                if last_matcher is not None:
-                    matchers.append(last_matcher)
-
-                last_matcher = AnyMatcher()
-
-        if last_matcher is not None:
-            matchers.append(last_matcher)
-
-        if len(matchers) == 0:
-            return ValueMatcher(value=())
-
-        return SequenceMatcher(matchers=tuple(matchers))
-
-    def value(self, tree: Tree[str]) -> NodeMatcher | ValueMatcher | RegexMatcher | VarMatcher:
-        assert len(tree.children) == 1
-        val = tree.children[0]
-
-        if isinstance(val, Tree):
-            if val.data == "tree":
-                return self.tree(val)
-
-            if val.data == "var":
-                var_name = str(val.children[0])
-
-                if var_name not in self._captures_seen:
-                    raise ASTPatternDefinitionError(
-                        f"Pattern uses match variable {var_name} before it was captured"
-                    )
-
-                return VarMatcher(var_name=var_name)
-
-            raise RuntimeError(f"Unexpected child Tree in value rule: {val}")
-
-        if val == "None":
-            return ValueMatcher(value=None)
-
-        # Must be a string
-        return RegexMatcher(_re_str=str(val[1:-1]))
-
-
-def validate_pattern(pattern_def: str) -> tuple[bool, str]:
+def validate_pattern(
+    pattern_def: str, types: Mapping[str, type[Any]] | None = None
+) -> tuple[bool, str]:
     """Validate a single pattern definition in a form of `pattern`.
 
     Args:
         pattern_def: The pattern definition to validate.
+        types: An optional mapping of AST class names to their types. If not provided,
+            the default mapping from `pyoak.serialize` is used.
 
     Returns:
         A tuple of a boolean indicating whether the pattern definition is valid and a string
         containing the error message if the pattern definition is invalid.
 
     """
-    try:
-        parsed_pattern_defs = pattern_def_parser.parse(pattern_def)
-    except UnexpectedInput as e:
-        return (
-            False,
-            f"Incorrect pattern definition. Context:\n{e.get_context(pattern_def)}",
-        )
-    except Exception:
-        return False, "Incorrect pattern definition. Unexpected error"
+    if types is None:
+        # Only import if needed
+        from ..serialize import TYPES
+
+        types = TYPES
+
+    # Import here to avoid circular imports
+    from .parser import Parser
 
     try:
-        _ = PatternDefInterpreter().visit(cast(Tree[str], parsed_pattern_defs))
-    except ASTPatternDefinitionError as e:
-        return False, e.message
-    except Exception as e:
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"Unexpected error during pattern definition grammar generation: {e}")
+        _ = Parser(types).parse_pattern(pattern_def)
+    except ASTXpathOrPatternDefinitionError as e:
+        return (False, str(e))
+    except Exception:
         return False, "Incorrect pattern definition. Unexpected error"
 
     return True, "Valid pattern definition"
 
 
 class MultiPatternMatcher:
-    def __init__(self, pattern_defs: Sequence[tuple[str, str]]) -> None:
+    def __init__(
+        self, pattern_defs: Sequence[tuple[str, str]], types: Mapping[str, type[Any]] | None = None
+    ) -> None:
         """A tree pattern matcher.
 
         Args:
             pattern_defs (Sequence[tuple[str, str]]): A sequence of tuples of pattern name
                 and pattern definition. Pattern names must be unqiue and are used
                 identify the pattern in the match result.
+            types: An optional mapping of AST class names to their types. If not provided,
+                the default mapping from `pyoak.serialize` is used.
 
         Raises:
-            ASTPatternDefinitionError: Raised if the pattern definition is incorrect
+            ASTXpathOrPatternDefinitionError: Raised if the pattern definition is incorrect
 
         """
 
         if len({pd[0] for pd in pattern_defs}) != len(pattern_defs):
-            raise ASTPatternDefinitionError("Pattern names must be unique")
+            raise ASTXpathOrPatternDefinitionError("Pattern names must be unique")
 
         self._name_to_matcher: dict[str, NodeMatcher] = {}
 
         incorrect_patterns: list[tuple[str, str]] = []
         for pattern_name, pattern_def in pattern_defs:
-            matcher, msg = NodeMatcher.from_pattern(pattern_def)
-
-            if matcher is None:
-                incorrect_patterns.append((pattern_name, msg))
-                continue
+            try:
+                matcher = NodeMatcher.from_pattern(pattern_def, types)
+            except Exception as e:
+                incorrect_patterns.append((pattern_name, str(e)))
 
             self._name_to_matcher[pattern_name] = matcher
 
         if incorrect_patterns:
-            raise ASTPatternDefinitionError(
+            raise ASTXpathOrPatternDefinitionError(
                 "Incorrect pattern definitions:\n"
                 + "\n".join(
                     [

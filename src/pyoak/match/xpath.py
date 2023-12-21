@@ -2,143 +2,36 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Generator, NamedTuple, Type, cast
+from typing import TYPE_CHECKING, Any, Generator, Mapping
 
-from lark import Lark, UnexpectedInput
-from lark.visitors import Transformer
-
-from pyoak.node import ASTNode
-
-from ..match.error import ASTXpathDefinitionError
-from ..match.helpers import check_and_get_ast_node_type
+from ..node import ASTNode
 from ..origin import NO_ORIGIN
+from .error import ASTXpathOrPatternDefinitionError
+from .parser import Parser
 
-xpath_grammar = """
-xpath: element* self
-
-element: "/" field_spec? index_spec? class_spec?
-
-self: "/" field_spec? index_spec? class_spec
-
-field_spec: "@" CNAME
-
-index_spec: "[" DIGIT* "]"
-
-class_spec: CNAME
-
-%import common.WS
-%import common.CNAME
-%import common.DIGIT
-
-%ignore WS
-"""
+if TYPE_CHECKING:
+    from .element import ASTXpathElement
 
 logger = logging.getLogger(__name__)
 
 
-class ASTXpathElement(NamedTuple):
-    ast_class: type[ASTNode]
-    parent_field: str | None
-    parent_index: int | None
-    anywhere: bool
-
-
-class XPathTransformer(Transformer[str, list[ASTXpathElement]]):
-    def xpath(
-        self, args: list[tuple[str | None, int | None, Type[ASTNode] | None]]
-    ) -> list[ASTXpathElement]:
-        ret: list[ASTXpathElement] = []
-
-        # The following logic parses the xpath in reverse order
-        elements = reversed(args)
-        for el in elements:
-            parent_field, parent_index, ast_class = el
-
-            while ast_class is None:
-                next_el = next(elements, None)
-                if next_el is None:
-                    # We are at the very beginning of the xpath
-                    # and it starts with // (or more)
-                    # change last element to anywhere and return
-                    ret[-1] = ASTXpathElement(
-                        ret[-1].ast_class, ret[-1].parent_field, ret[-1].parent_index, True
-                    )
-                    return ret
-
-                # Change last element to anywhere
-                ret[-1] = ASTXpathElement(
-                    ret[-1].ast_class, ret[-1].parent_field, ret[-1].parent_index, True
-                )
-
-                parent_field, parent_index, ast_class = next_el
-
-            ret.append(
-                ASTXpathElement(
-                    ast_class=ast_class,
-                    parent_field=parent_field,
-                    parent_index=parent_index,
-                    anywhere=False,
-                )
-            )
-
-        return ret
-
-    def element(
-        self, args: list[Type[ASTNode] | str | int]
-    ) -> tuple[str | None, int | None, Type[ASTNode] | None]:
-        if len(args) == 0:
-            return (None, None, None)
-
-        type_: Type[ASTNode] = ASTNode
-        parent_field: str | None = None
-        parent_index: int | None = None
-
-        for arg in args:
-            if isinstance(arg, type):
-                type_ = arg
-            elif isinstance(arg, int):
-                parent_index = arg if arg > -1 else None
-            else:
-                parent_field = arg
-
-        return parent_field, parent_index, type_
-
-    def self(
-        self, args: list[Type[ASTNode] | str | int]
-    ) -> tuple[str | None, int | None, Type[ASTNode] | None]:
-        return self.element(args)
-
-    def class_spec(self, args: list[str]) -> Type[ASTNode]:
-        type_, msg = check_and_get_ast_node_type(args[0])
-
-        if type_ is None:
-            raise ASTXpathDefinitionError(msg)
-
-        return type_
-
-    def index_spec(self, args: list[str]) -> int:
-        if len(args) == 0:
-            return -1
-        return int(args[0])
-
-    def field_spec(self, args: list[str]) -> str:
-        return args[0]
-
-
-xpath_parser = Lark(
-    grammar=xpath_grammar, start="xpath", parser="lalr", transformer=XPathTransformer()
-)
-
-
 def _match_node_element(node: ASTNode, element: ASTXpathElement) -> bool:
+    if isinstance(element.ast_class_or_pattern, type):
+        # If the element is a type, then we need to check if the node is an instance of that type
+        if not isinstance(node, element.ast_class_or_pattern):
+            return False
+    # Otherwise this must be a NodeMatcher
+    # We need to check if the node matches the matcher
+    else:
+        match, _ = element.ast_class_or_pattern.match(node)
+
+        if not match:
+            return False
+
     if (
-        isinstance(node, element.ast_class)
-        and (
-            element.parent_field is None
-            or (node.parent_field is not None and element.parent_field == node.parent_field.name)
-        )
-        and (element.parent_index is None or element.parent_index == node.parent_index)
-    ):
+        element.parent_field is None
+        or (node.parent_field is not None and element.parent_field == node.parent_field.name)
+    ) and (element.parent_index is None or element.parent_index == node.parent_index):
         return True
 
     return False
@@ -199,28 +92,38 @@ class ASTXpath:
             _AST_XPATH_CACHE[xpath] = super().__new__(cls)
         return _AST_XPATH_CACHE[xpath]
 
-    def __init__(self, xpath: str) -> None:
+    def __init__(self, xpath: str, types: Mapping[str, type[Any]] | None = None) -> None:
+        """Initialize the xpath.
+
+        Args:
+            xpath: The xpath to parse.
+            types: An optional mapping of AST class names to their types. If not provided,
+                the default mapping from `pyoak.serialize` is used.
+
+        """
+        if types is None:
+            # Only import if needed
+            from ..serialize import TYPES
+
+            types = TYPES
+
         if not xpath.startswith("/"):
             # Relative path is the same as absolute path starting with "anywehere"
             xpath = "//" + xpath
 
         try:
             # Reversed list used for matching from the node UP to the root
-            self._elements_reversed = cast(
-                list[ASTXpathElement],
-                xpath_parser.parse(xpath),
-            )
+            self._elements_reversed = list(Parser(types).parse_xpath(xpath))
 
             # Normal list used for searching from the root DOWN
             self._elements = list(reversed(self._elements_reversed))
-        except UnexpectedInput as e:
-            raise ASTXpathDefinitionError(
-                f"Incorrect xpath definition. Context:\n{e.get_context(xpath)}"
-            ) from None
-        except ASTXpathDefinitionError:
+        except ASTXpathOrPatternDefinitionError:
             raise
         except Exception as e:
-            raise ASTXpathDefinitionError("Incorrect xpath definition") from e
+            logger.debug("Internal error parsing xpath", exc_info=True)
+            raise ASTXpathOrPatternDefinitionError(
+                "Failed to parse Xpath due to internal error. Please report it!"
+            ) from e
 
     def match(self, node: ASTNode) -> bool:
         """Match the `node` to the xpath."""
