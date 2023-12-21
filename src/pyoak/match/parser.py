@@ -630,7 +630,12 @@ class Parser:
         msg: str,
         expected: Sequence[TokenType],
         actual: TokenType | None,
+        *,
+        omit_context: bool = False,
     ) -> ASTXpathOrPatternDefinitionError:
+        if omit_context:
+            return ASTXpathOrPatternDefinitionError(msg)
+
         if expected:
             expected_str = ", ".join(_pretty_print_tok_type(tok_type) for tok_type in expected)
 
@@ -830,7 +835,7 @@ class Parser:
         type_, msg = check_and_get_ast_node_type(class_name, self._types)
 
         if type_ is None:
-            raise self._get_grammar_error_exception(msg, [], None)
+            raise self._get_grammar_error_exception(msg, [], None, omit_context=True)
 
         return type_
 
@@ -903,7 +908,7 @@ class Parser:
         for class_name in class_names:
             type_, msg = check_and_get_ast_node_type(class_name, self._types)
             if type_ is None:
-                raise self._get_grammar_error_exception(msg, [], None)
+                raise self._get_grammar_error_exception(msg, [], None, omit_context=True)
 
             match_types.append(type_)
 
