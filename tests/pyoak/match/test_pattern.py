@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import pytest
-from pyoak.match.pattern import MultiPatternMatcher, NodeMatcher, validate_pattern
+from pyoak.match.pattern import BaseMatcher, validate_pattern
 from pyoak.node import ASTNode
 from pyoak.origin import NO_ORIGIN
 
@@ -45,6 +45,7 @@ class PTestChildMultiAttrs(ASTNode):
         ("any_class", "(*)"),
         ("class_only", "(PTestParent)"),
         ("multi_class", "(PTestParent | PTestChild1)"),
+        ("alternative", "(PTestParent) | (PTestChild1)"),
         ("one_field_any_val", "(PTestParent @foo)"),
         ("one_field_any_val_cap", "(PTestParent @foo -> foo_val)"),
         ("one_field_val", '(PTestParent @foo="val")'),
@@ -68,6 +69,11 @@ class PTestChildMultiAttrs(ASTNode):
         ("one_field_val_empty", "(PTestParent @child_tuple=[])"),
         ("one_child_val_any", "(PTestParent @child1=(*))"),
         ("one_child_val_any_cap", "(PTestParent @child1=(*) -> child_cap)"),
+        ("one_child_val_alt", "(PTestParent @child1=(PTestParent) | (PTestChild1))"),
+        (
+            "one_child_val_alt_cap",
+            "(PTestParent @child1=(PTestParent) | (PTestChild1) -> child_cap)",
+        ),
         ("one_child_val_none_cap", "(PTestParent @child1=None -> child_cap)"),
         ("one_child_val_empty_cap", "(PTestParent @child_tuple=[] -> child_cap)"),
         ("var_any_cap", "(* @child1=(*) -> child_cap @child2 = $child_cap)"),
@@ -79,6 +85,14 @@ class PTestChildMultiAttrs(ASTNode):
         (
             "one_child_val_arr_cap_inner",
             "(PTestParent @child_tuple=[(*) -> child_cap (*) *])",
+        ),
+        (
+            "one_child_val_arr_alt",
+            "(PTestParent @child_tuple=[(PTestParent) | (PTestChild1), (PTestParent) | (PTestChild1) *])",
+        ),
+        (
+            "one_child_val_arr_alt_cap_inner",
+            "(PTestParent @child_tuple=[(PTestParent) | (PTestChild1) -> child_cap (*) *])",
         ),
         (
             "one_child_val_arr_cap_all",
@@ -96,9 +110,20 @@ def test_correct_pattern_grammar(rule: str, pattern_def: str) -> None:
     "rule, pattern_def, expected_msg",
     [
         (
+            "##empty",
+            "",
+            "Expected: '(' (pattern start), got: end of text",
+        ),
+        (
+            "##empty_value",
+            "(PTestChild1 @foo=)",
+            "Expected: '[' (sequence start), '(' (pattern start), '$' (variable indicator),"
+            " a class name, an escaped string (possibly a regex), got: ')' (pattern end)",
+        ),
+        (
             "##any_and_multi_class",
             "(* | PTestChild1)",
-            "Expected: ')' (pattern end), got: '|' (class name separator)",
+            "Expected: ')' (pattern end), got: '|' (alternative separator)",
         ),
         (
             "##two_attr_cap_one_name",
@@ -125,87 +150,71 @@ def test_props_match() -> None:
     test_content_id = node.content_id
 
     # Test match by content_id
-    matcher = MultiPatternMatcher([("rule", f'(* @content_id="{test_content_id}")')])
-    match = matcher.match(node)
-    assert match is not None
-    rule, values = match
-    assert rule == "rule"
+    rule = f'(* @content_id="{test_content_id}")'
+    matcher = BaseMatcher.from_pattern(rule)
+    ok, values = matcher.match(node)
+    assert ok, f"Didn't match: {rule}"
     assert values == {}
 
     # allow any attributes
-    matcher = MultiPatternMatcher([("rule", "(PTestChildMultiAttrs @foo -> foo_val)")])
-    match = matcher.match(node)
-    assert match is not None
-    rule, values = match
-    assert rule == "rule"
+    rule = "(PTestChildMultiAttrs @foo -> foo_val)"
+    matcher = BaseMatcher.from_pattern(rule)
+    ok, values = matcher.match(node)
+    assert ok, f"Didn't match: {rule}"
     assert values["foo_val"] == "fooval"
 
     # allow any attributes, but mismatch attribute value
-    matcher = MultiPatternMatcher(
-        [("rule", '(PTestChildMultiAttrs @foo = "other_val" -> foo_val)')]
-    )
-    match = matcher.match(node)
-    assert match is None
+    rule = '(PTestChildMultiAttrs @foo = "other_val" -> foo_val)'
+    matcher = BaseMatcher.from_pattern(rule)
+    ok, values = matcher.match(node)
+    assert not ok, f"Matched, but wasn't supposed to: {rule}"
 
     # test value alternatives
-    matcher = MultiPatternMatcher(
-        [("rule", '(PTestChildMultiAttrs @foo = "other_val|f.o.*l" -> foo_val)')]
-    )
-    match = matcher.match(node)
-    assert match is not None
-    rule, values = match
-    assert rule == "rule"
+    rule = '(PTestChildMultiAttrs @foo = "other_val|f.o.*l" -> foo_val)'
+    matcher = BaseMatcher.from_pattern(rule)
+    ok, values = matcher.match(node)
+    assert ok, f"Didn't match: {rule}"
     assert values["foo_val"] == "fooval"
 
     # check non-existent attribute
-    matcher = MultiPatternMatcher(
-        [
-            (
-                "rule",
-                "(PTestChildMultiAttrs @non_existent)",
-            )
-        ]
-    )
-    match = matcher.match(node)
-    assert match is None
+    rule = "(PTestChildMultiAttrs @non_existent)"
+    matcher = BaseMatcher.from_pattern(rule)
+    ok, values = matcher.match(node)
+    assert not ok, f"Matched, but wasn't supposed to: {rule}"
 
     # Test match by id
-    matcher = MultiPatternMatcher([("rule", f'(* @id="{node.id}")')])
-    match = matcher.match(node)
-    assert match is not None
+    rule = f'(* @id="{node.id}")'
+    matcher = BaseMatcher.from_pattern(rule)
+    ok, values = matcher.match(node)
+    assert ok, f"Didn't match: {rule}"
 
     # Test match None
     node = PTestChildMultiAttrs("fooval", "barval", "bazval", None, origin=origin)
-    matcher = MultiPatternMatcher([("rule", "(* @zaz=None -> zaz_val)")])
-    match = matcher.match(node)
-    assert match is not None
-    rule, values = match
-    assert rule == "rule"
+    rule = "(* @zaz=None -> zaz_val)"
+    matcher = BaseMatcher.from_pattern(rule)
+    ok, values = matcher.match(node)
+    assert ok, f"Didn't match: {rule}"
     assert values["zaz_val"] is None
 
     # Test match variable
     node = PTestChildMultiAttrs("fooval", "fooval", "bazval", None, origin=origin)
-    matcher = MultiPatternMatcher([("rule", "(* @foo -> foo_val @bar=$foo_val)")])
-    match = matcher.match(node)
-    assert match is not None
-    rule, values = match
-    assert rule == "rule"
+    rule = "(* @foo -> foo_val @bar=$foo_val)"
+    matcher = BaseMatcher.from_pattern(rule)
+    ok, values = matcher.match(node)
+    assert ok, f"Didn't match: {rule}"
     assert values["foo_val"] == "fooval"
 
 
 def test_attr_value_capture() -> None:
-    rule = "(PTestParent @child1=(PTestChild1 @foo -> test_capture))"
-    matcher = MultiPatternMatcher([("rule", rule)])
+    matcher = BaseMatcher.from_pattern("(PTestParent @child1=(PTestChild1 @foo -> test_capture))")
     node = PTestParent(
         child1=PTestChild1("capture_value", origin=origin),
         child_any=PTestChild2("non_capture", origin=origin),
         origin=origin,
     )
 
-    match = matcher.match(node)
-    assert match is not None
-    rule, values = match
-    assert rule == "rule"
+    ok, values = matcher.match(node)
+    assert ok
     assert values["test_capture"] == "capture_value"
 
 
@@ -213,22 +222,20 @@ def test_child_field_match() -> None:
     # Test none match
     node = PTestParent(origin=origin)
 
-    matcher = MultiPatternMatcher(
-        [
-            ("rule_all_none", "(PTestParent @child1=None @child_tuple=[])"),
-            ("rule_first_none", "(PTestParent @child1=None)"),
-            ("rule_second_none", "(PTestParent @child_tuple=[])"),
-        ]
+    matcher = BaseMatcher.from_pattern(
+        "(PTestParent @child1=None @child_tuple=[] -> rule_all_none) | "
+        "(PTestParent @child_tuple=[] -> rule_tuple_none) | "
+        "(PTestParent @child1=None -> rule_first_none)"
     )
 
-    match = matcher.match(node)
-    assert match is not None
-    assert match[0] == "rule_all_none"
+    ok, values = matcher.match(node)
+    assert ok
+    assert list(values.keys()) == ["rule_all_none"]
 
     node = node.replace(child1=PTestChild1("deep_1", origin=origin))
-    match = matcher.match(node)
-    assert match is not None
-    assert match[0] == "rule_second_none"
+    ok, values = matcher.match(node)
+    assert ok
+    assert list(values.keys()) == ["rule_tuple_none"]
 
     node = node.replace(
         child1=None,
@@ -237,12 +244,12 @@ def test_child_field_match() -> None:
             PTestChild1("deep_3", origin=origin),
         ),
     )
-    match = matcher.match(node)
-    assert match is not None
-    assert match[0] == "rule_first_none"
+    ok, values = matcher.match(node)
+    assert ok
+    assert list(values.keys()) == ["rule_first_none"]
 
 
-def test_sequence_var_match() -> None:
+def test_var_match() -> None:
     f1 = PTestChild1("predecessor", origin=origin)
     f2 = f1.duplicate()  # not the same id, but same content
     only1 = PTestChild2("tail", origin=origin)
@@ -252,15 +259,36 @@ def test_sequence_var_match() -> None:
         origin=origin,
     )
 
-    macher = NodeMatcher.from_pattern(
+    macher = BaseMatcher.from_pattern(
         "(PTestParent @child_tuple=[(* @foo -> cap_foo) -> cap $cap *])"
     )
-    assert macher
 
     ok, match_dict = macher.match(node)
     assert ok
     assert match_dict["cap"] == f1
     assert match_dict["cap_foo"] == "predecessor"
+
+    # Now make sure capture variable context is correctly scoped
+    node.detach_self()
+    f3 = f1.duplicate()
+    f4 = f1.duplicate()
+
+    node = PTestParent(child1=f1, child_any=f2, child_tuple=(f3, f4), origin=origin)
+
+    # First, multiple captures should be preserved
+    rule = "(PTestParent @child1 -> ch1 @child_any -> ch2 @child_tuple=[$ch1 $ch2])"
+    macher = BaseMatcher.from_pattern(rule)
+    ok, match_dict = macher.match(node)
+    assert ok, f"Didn't match: {rule}"
+
+    # Second, in alternatives, only the matching capture should be preserved
+    rule = '(PTestParent @child1=(PTestChild1 @foo="no match") | (PTestChild1 @foo="predecessor") -> ch1 @child_any -> ch2 @child_tuple=[$ch1 $ch2] -> ch_tup)'
+    macher = BaseMatcher.from_pattern(rule)
+    ok, match_dict = macher.match(node)
+    assert ok, f"Didn't match: {rule}"
+    assert match_dict["ch1"] is f1
+    assert match_dict["ch2"] is f2
+    assert match_dict["ch_tup"] == (f3, f4)
 
 
 def test_sequence_empty_match() -> None:
@@ -269,22 +297,19 @@ def test_sequence_empty_match() -> None:
         origin=origin,
     )
 
-    macher = NodeMatcher.from_pattern("(PTestParent @child_tuple=[(PTestChild1) -> cap *])")
-    assert macher
+    macher = BaseMatcher.from_pattern("(PTestParent @child_tuple=[(PTestChild1) -> cap *])")
 
     ok, match_dict = macher.match(node)
     assert not ok
     assert not match_dict
 
-    macher = NodeMatcher.from_pattern("(PTestParent @child_tuple=[* -> cap_empty_seq])")
-    assert macher
+    macher = BaseMatcher.from_pattern("(PTestParent @child_tuple=[* -> cap_empty_seq])")
 
     ok, match_dict = macher.match(node)
     assert ok
     assert match_dict["cap_empty_seq"] == ()
 
-    macher = NodeMatcher.from_pattern("(PTestParent @child_tuple=[] -> cap_empty_node)")
-    assert macher
+    macher = BaseMatcher.from_pattern("(PTestParent @child_tuple=[] -> cap_empty_node)")
 
     ok, match_dict = macher.match(node)
     assert ok
@@ -307,12 +332,10 @@ def test_child_spec_capture() -> None:
     )
 
     rule = "(PTestParent @child_tuple -> test_capture)"
-    matcher = MultiPatternMatcher([("rule", rule)])
+    matcher = BaseMatcher.from_pattern(rule)
 
-    match = matcher.match(node)
-    assert match is not None
-    rule, values = match
-    assert rule == "rule"
+    ok, values = matcher.match(node)
+    assert ok, f"Didn't match: {rule}"
     assert values["test_capture"] == (sub1, sub2)
 
     node.detach()
@@ -328,21 +351,17 @@ def test_child_spec_capture() -> None:
     )
 
     rule = "(PTestParent @child_tuple =[(PTestChild1) (*) (PTestChild2) -> only_capture *])"
-    matcher = MultiPatternMatcher([("rule", rule)])
+    matcher = BaseMatcher.from_pattern(rule)
 
-    match = matcher.match(node)
-    assert match is not None
-    rule, values = match
-    assert rule == "rule"
+    ok, values = matcher.match(node)
+    assert ok, f"Didn't match: {rule}"
     assert values["only_capture"] == only1
 
     # Match any remaining
     rule = "(PTestParent @child_tuple =[(*) -> first * -> remaining])"
-    matcher = MultiPatternMatcher([("rule", rule)])
+    matcher = BaseMatcher.from_pattern(rule)
 
-    match = matcher.match(node)
-    assert match is not None
-    rule, values = match
-    assert rule == "rule"
+    ok, values = matcher.match(node)
+    assert ok, f"Didn't match: {rule}"
     assert values["first"] == f1
     assert values["remaining"] == (f2, only1, sub1, sub2)

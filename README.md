@@ -350,14 +350,28 @@ Types are instance comparisons, so any subclass matches a type.
 
 #### Pattern Matching
 
-Pattern matching is done using a "matcher" object. There are two of them:
-* `MultiPatternMatcher` for matching against multiple patterns
-* `NodeMatcher` for matching against a single pattern
+Pattern matching is done using a "matcher" object. To create a matcher:
 
-To create a `NodeMatcher`:
 ```python
-macher, msg = NodeMatcher.from_pattern("(RootClass @child_tuple=[(*) -> cap $cap *])")
-assert macher is not None, msg
+from pyoak.match.pattern import validate_pattern
+
+try:
+    macher = BaseMatcher.from_pattern("(RootClass @child_tuple=[(*) -> cap $cap *])")
+except ASTXpathOrPatternDefinitionError as e:
+    # Print out the reason why the pattern is invalid
+    print(e)
+```
+
+You can also validate a pattern without creating a matcher first:
+
+```python
+from pyoak.match.pattern import validate_pattern
+
+valid, msg = validate_pattern("(NotARealCalss ...)")
+
+if not valid:
+    # Print out the reason why the pattern is invalid
+    print(e)
 ```
 
 and then match:
@@ -369,21 +383,12 @@ assert ok
 assert match_dict["cap"] == f1
 ```
 
-With `MultiPatternMatcher` you'll first create it with a list of patterns you'd like to match against and then execute `match` against a node.
-
-```python
-matcher = MultiPatternMatcher(
-    [("rule1", '(Literal #value="re.*ex")'), ("rule2", '(IntLiteral #value="1")')]
-)
-match = matcher.match(node)
-```
-
-the result will be either `None`, meaning no pattern matched, or a tuple of the name of the pattern that matched and the match dict.
+The result will a tuple: a boolean indicating if the pattern has matched and a match dict.
 
 The match dict will contain a mapping from capture keys to values. Capture keys are the names you can embed within the pattern to store something within the matched node. E.g.:
 
 ```python
-matcher = MultiPatternMatcher([("rule", "(ParentType @child_tuple_field =[(Literal) -> first_child, * -> remaining_children])")])
+matcher = BaseMatcher.from_pattern("(ParentType @child_tuple_field =[(Literal) -> first_child, * -> remaining_children])")
 ```
 
 this pattern matches any subclass of `ParentType` that has a child field `child_tuple_field` which is a sequence, first child of type Literal and then zero or more children of any type and shape.

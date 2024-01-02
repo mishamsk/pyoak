@@ -4,13 +4,15 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
-    Iterable,
     Mapping,
     Sequence,
 )
+
+from pyoak import config
 
 from ..node import ASTNode
 from .error import ASTXpathOrPatternDefinitionError
@@ -27,6 +29,12 @@ _MatchRes = tuple[bool, _Vars]
 
 @dataclass(frozen=True, slots=True)
 class BaseMatcher(ABC):
+    """Base class for all matchers.
+
+    Use `from_pattern` to create a matcher from a pattern definition.
+
+    """
+
     name: str | None = field(default=None, kw_only=True)
 
     @abstractmethod
@@ -47,15 +55,63 @@ class BaseMatcher(ABC):
 
         return (True, {self.name: value, **new_vars})
 
+    @staticmethod
+    @lru_cache(maxsize=None)
+    def from_pattern(pattern_def: str, types: Mapping[str, type[Any]] | None = None) -> BaseMatcher:
+        """Create a Matcher from a pattern definition.
+
+        Args:
+            pattern_def: The pattern definition to parse.
+            types: An optional mapping of AST class names to their types. If not provided,
+                the default mapping from `pyoak.serialize` is used.
+
+        Returns:
+            A BaseMatcher instance.
+
+        Raises:
+            ASTXpathOrPatternDefinitionError: Raised if the pattern definition is incorrect
+
+        """
+        if types is None:
+            # Only import if needed
+            from ..serialize import TYPES
+
+            types = TYPES
+
+        # Import here to avoid circular imports
+        from .parser import Parser
+
+        try:
+            matcher = Parser(types).parse_pattern(pattern_def)
+        except ASTXpathOrPatternDefinitionError:
+            raise
+        except Exception as e:
+            if config.TRACE_LOGGING:
+                logger.debug(f"Unexpected error during pattern definition grammar generation: {e}")
+
+            raise ASTXpathOrPatternDefinitionError(
+                "Failed to parse a tree pattern due to internal error. Please report it!"
+            ) from e
+
+        return matcher
+
 
 @dataclass(frozen=True, slots=True)
 class AnyMatcher(BaseMatcher):
+    """Matcher that matches any value (`*` in pattern DSL)."""
+
     def _match(self, value: Any, ctx: _Vars) -> _MatchRes:
         return (True, {})
 
 
 @dataclass(frozen=True, slots=True)
 class ValueMatcher(BaseMatcher):
+    """Matcher that matches against a constant value.
+
+    In pattern DSL, it is used to match None & empty sequences only.
+
+    """
+
     value: Any
 
     def _match(self, value: Any, ctx: _Vars) -> _MatchRes:
@@ -71,6 +127,12 @@ class ValueMatcher(BaseMatcher):
 
 @dataclass(frozen=True, slots=True)
 class RegexMatcher(BaseMatcher):
+    """Matcher that matches a value against a regex.
+
+    In pattern DSL, this is represented as a double quoted escaped string.
+
+    """
+
     _re_str: str
     pattern: re.Pattern[str] = field(init=False)
 
@@ -86,6 +148,12 @@ class RegexMatcher(BaseMatcher):
 
 @dataclass(frozen=True, slots=True)
 class VarMatcher(BaseMatcher):
+    """Matcher that matches a value against a previously captured value.
+
+    In pattern DSL, this is represented as `$var_name`.
+
+    """
+
     var_name: str
 
     def _match(self, value: Any, ctx: _Vars) -> _MatchRes:
@@ -106,6 +174,13 @@ class VarMatcher(BaseMatcher):
 
 @dataclass(frozen=True, slots=True)
 class SequenceMatcher(BaseMatcher):
+    """Matcher that matches a sequence of values against a sequence of matchers.
+
+    In pattern DSL, this is represented as `[...]`, a comma separated list of matchers
+    in square brackets with an optional any (`*`) tail matcher.
+
+    """
+
     matchers: tuple[BaseMatcher, ...]
     tail_matcher: AnyMatcher | None = field(default=None, init=False)
 
@@ -134,8 +209,7 @@ class SequenceMatcher(BaseMatcher):
         ):
             return (False, {})
 
-        # For future - operate on a local context
-        # in case / when we'll have backtracking
+        # Create local mutable context
         local_ctx = dict(ctx)
         ret_vars: dict[str, Any] = {}
 
@@ -158,7 +232,28 @@ class SequenceMatcher(BaseMatcher):
         return (True, ret_vars)
 
 
-_MATCHER_CACHE: dict[str, NodeMatcher] = {}
+@dataclass(frozen=True, slots=True)
+class AlternativeMatcher(BaseMatcher):
+    """Matcher that matches a value against a set of alternatives in order. Only the first matching
+    alternative is used, and thus vlues are captured.
+
+    In pattern DSL, this is represented as `matcher | matcher | ...`.
+
+    """
+
+    matchers: tuple[BaseMatcher, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.matchers) == 0:
+            raise RuntimeError("AlternativeMatcher must have at least one matcher.")
+
+    def _match(self, value: Any, ctx: _Vars) -> _MatchRes:
+        for matcher in self.matchers:
+            ok, new_vars = matcher.match(value, ctx)
+            if ok:
+                return (True, new_vars)
+
+        return (False, {})
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,8 +270,7 @@ class NodeMatcher(BaseMatcher):
         if not isinstance(value, self.types):
             return (False, {})
 
-        # For future - operate on a local context
-        # in case / when we'll have backtracking
+        # Create local mutable context
         local_ctx = dict(ctx)
         ret_vars: dict[str, Any] = {}
 
@@ -192,51 +286,6 @@ class NodeMatcher(BaseMatcher):
             ret_vars.update(new_vars)
 
         return (True, ret_vars)
-
-    @classmethod
-    def from_pattern(
-        cls, pattern_def: str, types: Mapping[str, type[Any]] | None = None
-    ) -> NodeMatcher:
-        """Create a NodeMatcher from a pattern definition.
-
-        Args:
-            pattern_def: The pattern definition to parse.
-            types: An optional mapping of AST class names to their types. If not provided,
-                the default mapping from `pyoak.serialize` is used.
-
-        Returns:
-            A NodeMatcher instance.
-
-        Raises:
-            ASTXpathOrPatternDefinitionError: Raised if the pattern definition is incorrect
-
-        """
-        if pattern_def in _MATCHER_CACHE:
-            return _MATCHER_CACHE[pattern_def]
-
-        if types is None:
-            # Only import if needed
-            from ..serialize import TYPES
-
-            types = TYPES
-
-        # Import here to avoid circular imports
-        from .parser import Parser
-
-        try:
-            matcher = Parser(types).parse_pattern(pattern_def)
-        except ASTXpathOrPatternDefinitionError:
-            raise
-        except Exception as e:
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"Unexpected error during pattern definition grammar generation: {e}")
-
-            raise ASTXpathOrPatternDefinitionError(
-                "Failed to parse a tree pattern due to internal error. Please report it!"
-            ) from e
-
-        _MATCHER_CACHE[pattern_def] = matcher
-        return matcher
 
 
 def validate_pattern(
@@ -271,72 +320,3 @@ def validate_pattern(
         return False, "Incorrect pattern definition. Unexpected error"
 
     return True, "Valid pattern definition"
-
-
-class MultiPatternMatcher:
-    def __init__(
-        self, pattern_defs: Sequence[tuple[str, str]], types: Mapping[str, type[Any]] | None = None
-    ) -> None:
-        """A tree pattern matcher.
-
-        Args:
-            pattern_defs (Sequence[tuple[str, str]]): A sequence of tuples of pattern name
-                and pattern definition. Pattern names must be unqiue and are used
-                identify the pattern in the match result.
-            types: An optional mapping of AST class names to their types. If not provided,
-                the default mapping from `pyoak.serialize` is used.
-
-        Raises:
-            ASTXpathOrPatternDefinitionError: Raised if the pattern definition is incorrect
-
-        """
-
-        if len({pd[0] for pd in pattern_defs}) != len(pattern_defs):
-            raise ASTXpathOrPatternDefinitionError("Pattern names must be unique")
-
-        self._name_to_matcher: dict[str, NodeMatcher] = {}
-
-        incorrect_patterns: list[tuple[str, str]] = []
-        for pattern_name, pattern_def in pattern_defs:
-            try:
-                matcher = NodeMatcher.from_pattern(pattern_def, types)
-            except Exception as e:
-                incorrect_patterns.append((pattern_name, str(e)))
-
-            self._name_to_matcher[pattern_name] = matcher
-
-        if incorrect_patterns:
-            raise ASTXpathOrPatternDefinitionError(
-                "Incorrect pattern definitions:\n"
-                + "\n".join(
-                    [
-                        f"Pattern '{pattern_name}': {pattern_def}"
-                        for pattern_name, pattern_def in incorrect_patterns
-                    ]
-                )
-            )
-
-    def match(
-        self, node: ASTNode, rules: Iterable[str] | None = None
-    ) -> tuple[str, Mapping[str, Any]] | None:
-        """Match a node against the pattern definitions.
-
-        Args:
-            node: The node to match against the pattern definitions.
-            rules: The rules to match against (in order). If None, all rules will be checked.
-
-        Returns:
-            A tuple of the matched rule name and a dictionary of the matched values.
-            If no rule matches, None is returned.
-
-        """
-        if rules is None:
-            rules = self._name_to_matcher.keys()
-
-        for rule in rules:
-            ok, capture_dict = self._name_to_matcher[rule].match(node)
-
-            if ok:
-                return rule, capture_dict
-
-        return None

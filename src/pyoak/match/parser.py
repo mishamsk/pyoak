@@ -17,6 +17,8 @@ index_spec: "[" DIGIT* "]"
 
 class_spec: CNAME | tree
 
+pattern_alt: tree ("|" tree)*
+
 tree: "(" pattern_class_spec pattern_field_spec* ")"
 
 pattern_class_spec: ANY | CLASS ("|" CLASS)*
@@ -25,7 +27,7 @@ pattern_field_spec: "@" FIELD_NAME ("=" (sequence | value))? capture?
 
 sequence: "[" (value capture? ","?)* (ANY capture?)? "]"
 
-value: tree | var | NONE | ESCAPED_STRING
+value: pattern_alt | var | NONE | ESCAPED_STRING
 
 capture: "->" CNAME
 
@@ -66,12 +68,14 @@ from typing import (
     cast,
 )
 
+from pyoak import config
 from pyoak.match.error import ASTXpathOrPatternDefinitionError
 from pyoak.match.helpers import check_and_get_ast_node_type
 from pyoak.node import ASTNode
 
 from .element import ASTXpathElement
 from .pattern import (
+    AlternativeMatcher,
     AnyMatcher,
     BaseMatcher,
     NodeMatcher,
@@ -360,7 +364,7 @@ def _pretty_print_tok_type(tok_type: TokenType) -> str:
         case TokenType.EQUALS:
             return "'=' (item value separator)"
         case TokenType.PIPE:
-            return "'|' (class name separator)"
+            return "'|' (alternative separator)"
         case _ as unreachable:
             _assert_never(unreachable)
 
@@ -691,14 +695,10 @@ class Parser:
         """xpath: element* self"""
         elements = []
 
+        # Collect elements. Since hit_eoq will only work after the first
+        # peeking, this will effectively check that xpath is not empty
         while not self._lexer.hit_eoq:
             elements.append(self._element())
-
-        # Check for empty xpath. This is not allowed
-        if not elements:
-            raise ASTXpathOrPatternDefinitionError(
-                "Empty xpath definition. Make sure to include at least an AST node type."
-            )
 
         # Check that the last item (self) is not a pattern and has at least a class
         _, _, ast_class_or_pattern = elements[-1]
@@ -825,9 +825,6 @@ class Parser:
 
     def _class_spec(self) -> type[ASTNode] | NodeMatcher:
         """class_spec: CNAME | tree"""
-        if self._lexer.peek() == TokenType.LPAREN:
-            return self._tree()
-
         class_name = self._match_or_raise(
             TokenType.CNAME, "Incorrect definition of class name in xpath."
         ).value
@@ -838,6 +835,29 @@ class Parser:
             raise self._get_grammar_error_exception(msg, [], None, omit_context=True)
 
         return type_
+
+    def _pattern_alt(self) -> AlternativeMatcher | NodeMatcher:
+        """pattern_alt: tree ("|" tree)*"""
+        matchers: list[NodeMatcher] = []
+
+        while not self._lexer.hit_eoq:
+            matchers.append(self._tree())
+
+            if self._lexer.peek() != TokenType.PIPE:
+                break
+
+            self._lexer.consume()
+
+        # Check for empty pattern. This is not allowed
+        if not matchers:
+            raise ASTXpathOrPatternDefinitionError(
+                "Empty pattern definition. Make sure to include at least one tree pattern."
+            )
+
+        if len(matchers) == 1:
+            return matchers[0]
+
+        return AlternativeMatcher(matchers=tuple(matchers))
 
     def _tree(self) -> NodeMatcher:
         """tree: "(" class_spec field_spec* ")" """
@@ -983,7 +1003,7 @@ class Parser:
             case TokenType.LBRACKET:
                 return self._sequence()
             case TokenType.LPAREN:
-                return self._tree()
+                return self._pattern_alt()
             case TokenType.DOLLAR | TokenType.CNAME | TokenType.ESCAPED_STRING:
                 # TokenType.CNAME here is in place of NONE
                 return self._value()
@@ -1022,7 +1042,7 @@ class Parser:
         while next_tok and next_tok != TokenType.RBRACKET:
             match next_tok:
                 case TokenType.LPAREN:
-                    matchers.append(self._tree())
+                    matchers.append(self._pattern_alt())
                     expect_comma = True
                 case TokenType.DOLLAR | TokenType.CNAME | TokenType.ESCAPED_STRING:
                     matchers.append(self._value())
@@ -1147,12 +1167,13 @@ class Parser:
         except ASTXpathOrPatternDefinitionError:
             raise
         except Exception as e:
-            logger.debug("Internal error parsing xpath", exc_info=True)
+            if config.TRACE_LOGGING:
+                logger.debug("Internal error parsing xpath", exc_info=True)
             raise ASTXpathOrPatternDefinitionError(
                 "Failed to parse Xpath due to internal error. Please report it!"
             ) from e
 
-    def parse_pattern(self, pattern: str) -> NodeMatcher:
+    def parse_pattern(self, pattern: str) -> AlternativeMatcher | NodeMatcher:
         """Public API to parse a tree pattern.
 
         Args:
@@ -1166,7 +1187,17 @@ class Parser:
         self._reset(pattern)
 
         try:
-            return self._tree()
+            ret = self._pattern_alt()
+
+            # This is the top-level alternative, so it must be the last thing in the pattern
+            if not self._lexer.hit_eoq and (next_tok := self._lexer.peek()):
+                raise self._get_grammar_error_exception(
+                    "Incorrect tree pattern definition.",
+                    [TokenType._EOF],
+                    next_tok.type,
+                )
+
+            return ret
         except UnexpectedCharactersError as e:
             # This will catch lexer errors that are not checked in the rules
             raise ASTXpathOrPatternDefinitionError(
@@ -1175,7 +1206,8 @@ class Parser:
         except ASTXpathOrPatternDefinitionError:
             raise
         except Exception as e:
-            logger.debug("Internal error parsing tree pattern", exc_info=True)
+            if config.TRACE_LOGGING:
+                logger.debug("Internal error parsing tree pattern", exc_info=True)
             raise ASTXpathOrPatternDefinitionError(
                 "Failed to parse a tree pattern due to internal error. Please report it!"
             ) from e
