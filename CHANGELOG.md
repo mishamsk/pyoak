@@ -35,6 +35,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - TBD
 
+## [3.0.0a3]
+
+Highlight: an alternative (OR) pattern for trees.
+
+### 🚀 Added
+
+- Introduced an alternative (OR) pattern for trees
+- More documentation on pattern matcher
+
+### ✨ Changed
+
+- Moved `from_pattern` factory to BaseMatcher
+
+### 🔥 Removed
+
+- Breaking: Removed MultiPatternMatcher in favor of OR pattern
+
+### 🛠️ Internal
+
+- Improved pattern matching with the use of `lru_cache` instead of custom cache
+- Configured mypy to not follow imports for traitlets
+
 ## [3.0.0a2]
 
 ### ✨ Changed

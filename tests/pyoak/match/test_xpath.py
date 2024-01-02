@@ -48,6 +48,11 @@ def test_init() -> None:
 
     # Test invalid XPath
     with pytest.raises(ASTXpathOrPatternDefinitionError) as excinfo:
+        ASTXpath("")
+
+    assert "Incorrect xpath definition" in str(excinfo.value)
+
+    with pytest.raises(ASTXpathOrPatternDefinitionError) as excinfo:
         ASTXpath("//")
 
     assert "Incorrect xpath definition" in str(excinfo.value)

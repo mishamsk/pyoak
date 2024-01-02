@@ -120,7 +120,7 @@ mypy_path = "src"
 
 [[tool.mypy.overrides]]
 # Ignore import errors for 3rd party libraries with type stubs
-module = ["deepdiff.*", "msgpack.*", "ruamel.*"]
+module = ["deepdiff.*", "msgpack.*", "ruamel.*", "traitlets.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
