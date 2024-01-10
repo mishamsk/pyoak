@@ -35,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - TBD
 
+## [3.0.0a4]
+
+### 🚀 Added
+
+- source registry tests
+- expose Source.get_source_by_registry_id API
+
 ## [3.0.0a3]
 
 Highlight: an alternative (OR) pattern for trees.

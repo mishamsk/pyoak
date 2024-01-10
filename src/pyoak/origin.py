@@ -170,6 +170,10 @@ class Source(DataClassSerializeMixin, FQN):
     def source_registry_id(self) -> int:
         return Source._sources[self]
 
+    @staticmethod
+    def get_source_by_registry_id(idx: int) -> Source | None:
+        return Source._source_idx_to_source.get(idx)
+
 
 @dataclass(frozen=True)
 class TextSource(Source):
