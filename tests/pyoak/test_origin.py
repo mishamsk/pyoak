@@ -33,6 +33,45 @@ from pyoak.origin import (
 )
 
 
+def test_source_registry() -> None:
+    # Start from a clean slate
+    Source.clear_registry()
+
+    # Default
+    assert Source.list_registered_sources() == [NO_SOURCE]
+    assert Source.list_registered_sources(exclude_no_source=True) == []
+
+    # Register a source
+    s = TextSource("uri1", "type1", _raw="raw1")
+    assert Source.list_registered_sources() == [s, NO_SOURCE]
+    assert Source.list_registered_sources(exclude_no_source=True) == [s]
+    assert Source.get_source_by_registry_id(s.source_registry_id) is s
+    orig_s_id = s.source_registry_id
+
+    # Add the same source again (should be equal and retain the same id)
+    s1 = TextSource("uri1", "type1")
+    assert s1 == s
+    assert s1.source_registry_id == s.source_registry_id == orig_s_id
+    assert Source.list_registered_sources() == [s, NO_SOURCE]
+    assert Source.list_registered_sources(exclude_no_source=True) == [s]
+    assert Source.get_source_by_registry_id(s1.source_registry_id) is s
+
+    # Now add a different source
+    s2 = TextSource("uri2", "type2")
+    assert s2 != s
+    assert s.source_registry_id == orig_s_id
+    assert s2.source_registry_id != s.source_registry_id
+    assert Source.list_registered_sources() == [s, s2, NO_SOURCE]
+    assert Source.list_registered_sources(exclude_no_source=True) == [s, s2]
+    assert Source.get_source_by_registry_id(s2.source_registry_id) is s2
+    assert Source.get_source_by_registry_id(s.source_registry_id) is s
+
+    # Test registry clear
+    Source.clear_registry()
+    assert Source.list_registered_sources() == [NO_SOURCE]
+    assert Source.list_registered_sources(exclude_no_source=True) == []
+
+
 @pytest.fixture
 def test_file(tmp_path: Path) -> TextFileSource:
     test_file_name = "test_file.txt"
