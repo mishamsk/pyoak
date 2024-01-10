@@ -332,13 +332,15 @@ def _pretty_print_tok_type(tok_type: TokenType) -> str:
         case TokenType.WS:
             return "whitespace"
         case TokenType.CNAME:
-            return "a class name"
+            return "a name (identifier)"
         case TokenType.ESCAPED_STRING:
             return "an escaped string (possibly a regex)"
         case TokenType.DIGITS:
             return "a number"
         case TokenType.CAPTURE_START:
             return "-> (capture indicator)"
+        # This & None will never be hit, due to python enum aliases
+        # being the same object as the original enum member
         case TokenType.CAPTURE_KEY:
             return "a capture name"
         case TokenType.NONE:
@@ -456,6 +458,9 @@ class LexerMode(Enum):
 
     Left for future use, to allow different token sets to be allowed in different contexts.
 
+    The idea is to have a different regex for each mode, and switch between them using a context
+    manager on the lexer.
+
     """
 
     REGULAR = auto()
@@ -527,9 +532,10 @@ class Lexer(LookaheadQueue[Token]):
 
     @contextmanager
     def mode(self, mode: LexerMode) -> Generator[None, None, None]:
-        """Context manager to switch lexer state to only match capture key.
+        """Context manager to switch lexer state.
 
         It is not currently used, but left here for future use.
+        See `LexerMode` for more details.
 
         Returns:
             AbstractContextManager[None]: the context manager
@@ -979,7 +985,7 @@ class Parser:
     def _parse_capture_key(self) -> str:
         try:
             capture_key = self._match_or_raise(
-                TokenType.CAPTURE_KEY,  # use alias for prettier error message
+                TokenType.CAPTURE_KEY,
                 "Incorrect definition of capture key in a tree pattern.",
             ).value
         except UnexpectedCharactersError as e:

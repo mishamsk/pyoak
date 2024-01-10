@@ -118,7 +118,7 @@ def test_correct_pattern_grammar(rule: str, pattern_def: str) -> None:
             "##empty_value",
             "(PTestChild1 @foo=)",
             "Expected: '[' (sequence start), '(' (pattern start), '$' (variable indicator),"
-            " a class name, an escaped string (possibly a regex), got: ')' (pattern end)",
+            " a name (identifier), an escaped string (possibly a regex), got: ')' (pattern end)",
         ),
         (
             "##any_and_multi_class",
