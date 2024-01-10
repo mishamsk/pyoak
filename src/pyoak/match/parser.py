@@ -689,11 +689,13 @@ class Parser:
 
         return token
 
-    def _check_unique_capture(self, capture_key: str) -> None:
-        if capture_key in self._captures_seen:
-            raise self._get_grammar_error_exception(
-                f"Capture name <{capture_key}> used more than once", [], None
-            )
+    def _check_and_save_capture_key(self, capture_key: str) -> None:
+        # We didn't allow capture keys to be used more than once previously
+        # This code is left temporarily, in case we want to re-enable this
+        # if capture_key in self._captures_seen:
+        #     raise self._get_grammar_error_exception(
+        #         f"Capture name <{capture_key}> used more than once", [], None
+        #     )
 
         self._captures_seen.add(capture_key)
 
@@ -976,7 +978,7 @@ class Parser:
                     pass
 
         if capture_key is not None:
-            self._check_unique_capture(capture_key)
+            self._check_and_save_capture_key(capture_key)
 
             return field_name, replace(matcher, name=capture_key)
 
@@ -1093,7 +1095,7 @@ class Parser:
                 self._lexer.consume()
                 capture_key = self._parse_capture_key()
 
-                self._check_unique_capture(capture_key)
+                self._check_and_save_capture_key(capture_key)
 
                 matchers[-1] = replace(matchers[-1], name=capture_key)
                 next_tok = self._lexer.peek()

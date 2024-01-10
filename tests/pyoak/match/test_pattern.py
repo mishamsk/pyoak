@@ -126,9 +126,9 @@ def test_correct_pattern_grammar(rule: str, pattern_def: str) -> None:
             "Expected: ')' (pattern end), got: '|' (alternative separator)",
         ),
         (
-            "##two_attr_cap_one_name",
+            "##extra_rbracket",
             '(PTestParent @foo="val" -> same_val  @bar="barval" -> same_val])',
-            "Capture name <same_val> used more than once",
+            "Expected: ')' (pattern end), got: ']' (sequence end)",
         ),
         (
             "##two_attr_var_before_cap",
@@ -365,3 +365,31 @@ def test_child_spec_capture() -> None:
     assert ok, f"Didn't match: {rule}"
     assert values["first"] == f1
     assert values["remaining"] == (f2, only1, sub1, sub2)
+
+
+def test_same_name_capture() -> None:
+    # If the same capture name used twice, the last one should be used
+    node = PTestParent(
+        child_tuple=(
+            PTestChild1("deep_1", origin=origin),
+            PTestChild1("deep_2", origin=origin),
+        ),
+        origin=origin,
+    )
+
+    rule = "(PTestParent @child_tuple=[(PTestChild1 @foo -> cap) (PTestChild1 @foo -> cap)])"
+    matcher = BaseMatcher.from_pattern(rule)
+
+    ok, values = matcher.match(node)
+    assert ok, f"Didn't match: {rule}"
+    assert values["cap"] == "deep_2"
+
+    # But in alternative, the one that matches should be used
+    cnode = PTestChild1("deep_1", origin=origin)
+
+    rule = '(PTestChild1 @foo=".*_1" -> cap) | (PTestChild1 @foo=".*_2" -> cap)'
+    matcher = BaseMatcher.from_pattern(rule)
+
+    ok, values = matcher.match(cnode)
+    assert ok, f"Didn't match: {rule}"
+    assert values["cap"] == "deep_1"

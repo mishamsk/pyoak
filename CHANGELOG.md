@@ -35,6 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - TBD
 
+## [3.0.0a5]
+
+### ✨ Changed
+
+- allow capture key to be re-used (last captured value wins)
+- improve CNAME token error message
+
+### 🛠️ Internal
+
+- explain lexer mode boilerplate better
+
 ## [3.0.0a4]
 
 ### 🚀 Added
