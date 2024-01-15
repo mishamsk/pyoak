@@ -130,6 +130,16 @@ def test_xpath_match() -> None:
     assert xpath.match(n)
     assert not xpath.match(n2)
 
+    # With faked ancestors
+    # First validate that it is correct with default ancestors
+    xpath = ASTXpath("//XpathMiddle/XpathMiddle/XpathNested")
+    assert not xpath.match(n2)
+    assert xpath.match(n)
+
+    # Now match with ancestors swapped
+    assert xpath.match(n2, ancestors=list(n.ancestors()))
+    assert not xpath.match(n, ancestors=list(n2.ancestors()))
+
 
 def test_xpath_find() -> None:
     n = XpathNested("test", origin=origin)
