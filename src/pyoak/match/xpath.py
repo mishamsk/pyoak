@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generator, Mapping
+from typing import TYPE_CHECKING, Any, Generator, Mapping, Sequence
 
 from ..node import ASTNode
 from ..origin import NO_ORIGIN
@@ -37,7 +37,21 @@ def _match_node_element(node: ASTNode, element: ASTXpathElement) -> bool:
     return False
 
 
-def _match_node_xpath(node: ASTNode, elements: list[ASTXpathElement]) -> bool:
+def _match_node_xpath(
+    node: ASTNode, elements: list[ASTXpathElement], ancestors: Sequence[ASTNode]
+) -> bool:
+    """Match the `node` against the `elements` of the xpath.
+
+    Args:
+        node (ASTNode): the node to match
+        elements (list[ASTXpathElement]): the elements of the xpath
+        ancestors (Sequence[ASTNode]): the ancestors of the node, sorted from the closest to the
+            node to the root
+
+    Returns:
+        bool: True if the node matches the xpath, False otherwise
+
+    """
     element = elements[0]
 
     # Ok, so we are somewhere in the middle (or start) of the search
@@ -47,29 +61,33 @@ def _match_node_xpath(node: ASTNode, elements: list[ASTXpathElement]) -> bool:
 
     # The current node matches the current element, so we need to go up the AST
     # Elements are already in reversed order, so we pass the tail of the elements list
-    tail = elements[1:]
+    xpath_tail = elements[1:]
 
-    if len(tail) == 0:
+    parent: ASTNode | None = ancestors[0] if ancestors else None
+
+    if len(xpath_tail) == 0:
         # If we werr checking the last element, then there are two options:
         # - it was anywhere => we have a match
         # - it was not anywhere => we need to check if the node has no parent
         #   and if it doesn't then we have a match
-        return element.anywhere or node.parent is None
+        return element.anywhere or parent is None
 
     # Ok, so we have remaining elements to match
     # If no parent then no match
-    if node.parent is None:
+    if parent is None:
         return False
 
     # Otherwise we need to match the remaining elements to the parent
     if element.anywhere:
         # Anywhere means any ancestor can match
-        for ancestor in node.ancestors():
-            if _match_node_xpath(ancestor, tail):
+        for i, ancestor in enumerate(ancestors):
+            cur_ancestor_ancestors = ancestors[i + 1 :]
+
+            if _match_node_xpath(ancestor, xpath_tail, cur_ancestor_ancestors):
                 return True
     else:
         # Otherwise we need to match only the direct parent
-        return _match_node_xpath(node.parent, tail)
+        return _match_node_xpath(parent, xpath_tail, ancestors[1:])
 
     # No match
     return False
@@ -125,9 +143,19 @@ class ASTXpath:
                 "Failed to parse Xpath due to internal error. Please report it!"
             ) from e
 
-    def match(self, node: ASTNode) -> bool:
-        """Match the `node` to the xpath."""
-        return _match_node_xpath(node, self._elements_reversed)
+    def match(self, node: ASTNode, *, ancestors: Sequence[ASTNode] | None = None) -> bool:
+        """Match the `node` to the xpath.
+
+        Args:
+            node: The node to match.
+            ancestors: Pre-computed ancestors of the node, sorted from the closest
+                to the node to the root. If not provided, the node.ancestors() will be used.
+
+        Returns:
+            True if the node matches the xpath, False otherwise.
+
+        """
+        return _match_node_xpath(node, self._elements_reversed, ancestors or list(node.ancestors()))
 
     def findall(self, root: ASTNode) -> Generator[ASTNode, None, None]:
         """Find all nodes in the `root` that match the xpath.
