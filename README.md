@@ -322,11 +322,12 @@ If you want to match a given node, i.e. check if it's in the path, you must crea
 ```python
 from pyoak.match.xpath import ASTXpath
 
-root_node = parse("some code")
+root_node = parse("x = 1")
+initializer = root_node.find("//IntLiteral")
 xpath = ASTXpath("//IntLiteral")
 
 ...
-if xpath.match(root_node, some_node):
+if xpath.match(initializer):
     print("Matched!")
 ```
 
@@ -337,7 +338,7 @@ Each path is in the format `@parent_field_name[index]type_name_or_pattern` and i
 - The slash is optional at the start of the XPath. If omitted, it is the same as using `//the rest of the path`.
 - `//` is a wildcard (anywhere) that matches any path.
 - `@parent_field_name` and `index` are optional.
-- `type_name_or_pattern` is optional, except for the last path in the XPath (which must be type, not pattern).
+- `type_name_or_pattern` is optional, except for the last path in the XPath.
 
 Types are instance comparisons, so any subclass matches a type.
 

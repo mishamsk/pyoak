@@ -9,7 +9,7 @@ xpath: element* self
 
 element: "/" field_spec? index_spec? class_spec?
 
-self: "/" field_spec? index_spec? CNAME
+self: "/" field_spec? index_spec? class_spec
 
 field_spec: "@" CNAME
 
@@ -703,22 +703,19 @@ class Parser:
         """xpath: element* self"""
         elements = []
 
-        # Collect elements. Since hit_eoq will only work after the first
-        # peeking, this will effectively check that xpath is not empty
+        # Collect elements. Since hit_eoq will only work (i.e. show that there no more tokens)
+        # after the first call to peek, which in turn only happens inside `_element` call
+        # this will effectively check that xpath is not empty, because `_element` will raise
+        # an error if there are no more tokens
         while not self._lexer.hit_eoq:
             elements.append(self._element())
 
-        # Check that the last item (self) is not a pattern and has at least a class
+        # Check that the last item (self) is not empty
         _, _, ast_class_or_pattern = elements[-1]
 
         if ast_class_or_pattern is None:
             raise ASTXpathOrPatternDefinitionError(
-                "Incorrect xpath definition. Last element must be an AST node type."
-            )
-
-        if isinstance(ast_class_or_pattern, NodeMatcher):
-            raise ASTXpathOrPatternDefinitionError(
-                "Incorrect xpath definition. Last element must can't be a pattern, use a plain AST node type."
+                "Incorrect xpath definition. Last element must be an AST node type or a pattern."
             )
 
         ret: list[ASTXpathElement] = []
