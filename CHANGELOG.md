@@ -35,6 +35,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - TBD
 
+## [3.0.0a6]
+
+### 🚀 Added
+
+- add optional ancestors kwarg to xpath.match to use precomputed ancestors
+
+### ✨ Changed
+
+- allow pattern as the right most element in xpath
+
+### 🛠️ Internal
+
+- update pre-commit hooks
+
+- explain lexer mode boilerplate better
+
 ## [3.0.0a5]
 
 ### ✨ Changed
