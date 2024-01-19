@@ -70,7 +70,7 @@ from typing import (
 
 from pyoak import config
 from pyoak.match.error import ASTXpathOrPatternDefinitionError
-from pyoak.match.helpers import check_and_get_ast_node_type
+from pyoak.match.helpers import check_and_get_ast_node_type, point_at_index
 from pyoak.node import ASTNode
 
 from .element import ASTXpathElement
@@ -96,7 +96,7 @@ def _assert_never(arg: NoReturn, /) -> NoReturn:
 
 
 class NoMatchError(Exception, Generic[_IT]):
-    def __init__(self, expected: _IT, actual: _IT | None) -> None:
+    def __init__(self, expected: Any, actual: _IT | None) -> None:
         self.expected = expected
         self.actual = actual
 
@@ -276,6 +276,9 @@ class LookaheadQueue(Generic[_IT]):
 
         Returns:
             _IT: the item or None if there is no item
+
+        Raises:
+            NoMatchError: if the next item does not match the given value
 
         """
         item = self.peek()
@@ -639,7 +642,7 @@ class Parser:
         self,
         msg: str,
         expected: Sequence[TokenType],
-        actual: TokenType | None,
+        actual: Token | TokenType | None,
         *,
         omit_context: bool = False,
     ) -> ASTXpathOrPatternDefinitionError:
@@ -651,19 +654,38 @@ class Parser:
 
             msg += f"\nExpected: {expected_str}"
 
-        if actual is not None:
+        err_point_index = self._lexer.text_pos
+        err_point_length = 1
+        if isinstance(actual, Token):
+            msg += f", got: {_pretty_print_tok_type(actual.type)}"
+            err_point_index = actual.start
+            err_point_length = actual.stop - actual.start
+        elif isinstance(actual, TokenType):
             msg += f", got: {_pretty_print_tok_type(actual)}"
+
+            last_token = self._lexer.last()
+
+            if last_token is not None:
+                err_point_index = last_token.start
+                err_point_length = last_token.stop - last_token.start
+
+        # The index to point to is relative to the start of the text context
+        # so we need to subtract the start of the text context
+        err_point_index = max(0, err_point_index - max(0, self._lexer.text_pos - 40))
+
+        text_ctx_with_ptr = point_at_index(
+            self._lexer.text[max(0, self._lexer.text_pos - 40) : self._lexer.text_pos + 40],
+            err_point_index,
+            err_point_length,
+        )
+
+        msg += "\n\nText context:\n" f"{text_ctx_with_ptr}"
 
         prev_tokens = self._lexer.items[-5:]
 
         if prev_tokens:
             msg += "\n\nPrevious tokens:\n"
             msg += "\n".join(f"{token!r}" for token in prev_tokens)
-
-        msg += (
-            "\n\nText content:\n"
-            f"{self._lexer.text[self._lexer.text_pos-20:self._lexer.text_pos+20]}"
-        )
 
         return ASTXpathOrPatternDefinitionError(msg)
 

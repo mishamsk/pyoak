@@ -35,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - TBD
 
+## [3.0.0a7]
+
+### 🚀 Added
+
+- add pointer to precise location in parser errors
+
 ## [3.0.0a6]
 
 ### 🚀 Added
