@@ -1,7 +1,18 @@
+from dataclasses import dataclass
 from typing import Iterable
 
 import pytest
-from pyoak.match.parser import Lexer, LexerMode, LookaheadQueue, NoMatchError, Token, TokenType
+from pyoak.match.error import ASTXpathOrPatternDefinitionError
+from pyoak.match.parser import (
+    Lexer,
+    LexerMode,
+    LookaheadQueue,
+    NoMatchError,
+    Parser,
+    Token,
+    TokenType,
+)
+from pyoak.node import ASTNode
 
 
 class IntLAQueue(LookaheadQueue[int]):
@@ -269,3 +280,50 @@ def test_correct_lexing(text: str, expected: list[Token], mode: LexerMode):
         # Tokens are equal purely based on type
         # so we need to check the rest of the attributes
         assert all(tok._asdict() == exp_tok._asdict() for tok, exp_tok in zip(all_tokens, expected))
+
+
+def test_error_reporting():
+    @dataclass
+    class TestType(ASTNode):
+        pass
+
+    parser = Parser({"TestType": TestType})
+
+    with pytest.raises(ASTXpathOrPatternDefinitionError) as excinfo:
+        parser.parse_xpath("//(TestType ])")
+
+    assert excinfo.value.message.startswith(
+        """Incorrect definition of a tree pattern.
+Expected: ')' (pattern end), got: ']' (sequence end)
+
+Text context:
+//(TestType ])
+         ---^"""
+    )
+
+    with pytest.raises(ASTXpathOrPatternDefinitionError) as excinfo:
+        parser.parse_pattern(
+            "(TestType @attr=(TestType @attr -> cap)) |"
+            "(TestType @attr=(TestType @attr -> (* @id -> id)))"
+        )
+
+    assert excinfo.value.message.startswith(
+        """Incorrect definition of capture key in a tree pattern.
+Expected: a name (identifier), got: '(' (pattern start)
+
+Text context:
+)) |(TestType @attr=(TestType @attr -> (* @id -> id)))
+                                    ---^"""
+    )
+
+    with pytest.raises(ASTXpathOrPatternDefinitionError) as excinfo:
+        parser.parse_pattern("(TestType @attr=(TestType @attr cap))")
+
+    assert excinfo.value.message.startswith(
+        """Incorrect definition of a tree pattern.
+Expected: ')' (pattern end), got: a name (identifier)
+
+Text context:
+(TestType @attr=(TestType @attr cap))
+                             ---^^^"""
+    )
