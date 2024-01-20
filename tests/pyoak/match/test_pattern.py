@@ -98,6 +98,11 @@ class PTestChildMultiAttrs(ASTNode):
             "one_child_val_arr_cap_all",
             "(PTestParent @child_tuple=[(*) -> child_cap (*) * -> all_cap])",
         ),
+        (
+            "alternative_with_multi_cap",
+            "(PTestParent @child_tuple=[(*) -> +child_cap * -> all_cap]) | "
+            "(PTestChild1 @foo -> +child_cap)",
+        ),
     ],
     ids=lambda p: f"test_pattern_{p}" if not p.startswith("(") else "",
 )
@@ -112,28 +117,34 @@ def test_correct_pattern_grammar(rule: str, pattern_def: str) -> None:
         (
             "##empty",
             "",
-            "Expected: '(' (pattern start), got: end of text",
+            "Expected: '(' (pattern start). Got: end of text",
         ),
         (
             "##empty_value",
             "(PTestChild1 @foo=)",
-            "Expected: '[' (sequence start), '(' (pattern start), '$' (variable indicator),"
-            " a name (identifier), an escaped string (possibly a regex), got: ')' (pattern end)",
+            "Expected one of: '[' (sequence start), '(' (pattern start), '$' (variable indicator),"
+            " a name (identifier), an escaped string (possibly a regex). Got: ')' (pattern end)",
         ),
         (
             "##any_and_multi_class",
             "(* | PTestChild1)",
-            "Expected: ')' (pattern end), got: '|' (alternative separator)",
+            "Expected one of: ')' (pattern end), '@' (field indicator). Got: '|' (alternative separator)",
         ),
         (
             "##extra_rbracket",
             '(PTestParent @foo="val" -> same_val  @bar="barval" -> same_val])',
-            "Expected: ')' (pattern end), got: ']' (sequence end)",
+            "Expected one of: ')' (pattern end), '@' (field indicator). Got: ']' (sequence end)",
         ),
         (
             "##two_attr_var_before_cap",
             '(PTestParent @foo= $same_val  bar="barval" -> same_val])',
             "Pattern uses match variable <same_val> before it was captured",
+        ),
+        (
+            "##mixed_cap_var_type",
+            "(PTestParent @foo -> cap @bar -> +cap])",
+            'Name <cap> is already used as a "single" type match variable.'
+            " Using the same name to capture a single and multiple values is not allowed",
         ),
     ],
     # will effectively use the rule name as the test name
@@ -154,39 +165,42 @@ def test_props_match() -> None:
     matcher = BaseMatcher.from_pattern(rule)
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
-    assert values == {}
+    assert values == {}, "Expected empty match dict"
 
     # allow any attributes
     rule = "(PTestChildMultiAttrs @foo -> foo_val)"
     matcher = BaseMatcher.from_pattern(rule)
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
-    assert values["foo_val"] == "fooval"
+    assert values == {"foo_val": "fooval"}
 
     # allow any attributes, but mismatch attribute value
     rule = '(PTestChildMultiAttrs @foo = "other_val" -> foo_val)'
     matcher = BaseMatcher.from_pattern(rule)
     ok, values = matcher.match(node)
     assert not ok, f"Matched, but wasn't supposed to: {rule}"
+    assert values == {}, "Expected empty match dict"
 
     # test value alternatives
     rule = '(PTestChildMultiAttrs @foo = "other_val|f.o.*l" -> foo_val)'
     matcher = BaseMatcher.from_pattern(rule)
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
-    assert values["foo_val"] == "fooval"
+    assert values == {"foo_val": "fooval"}
 
     # check non-existent attribute
     rule = "(PTestChildMultiAttrs @non_existent)"
     matcher = BaseMatcher.from_pattern(rule)
     ok, values = matcher.match(node)
     assert not ok, f"Matched, but wasn't supposed to: {rule}"
+    assert values == {}, "Expected empty match dict"
 
     # Test match by id
     rule = f'(* @id="{node.id}")'
     matcher = BaseMatcher.from_pattern(rule)
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
+    assert values == {}, "Expected empty match dict"
 
     # Test match None
     node = PTestChildMultiAttrs("fooval", "barval", "bazval", None, origin=origin)
@@ -194,7 +208,7 @@ def test_props_match() -> None:
     matcher = BaseMatcher.from_pattern(rule)
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
-    assert values["zaz_val"] is None
+    assert values == {"zaz_val": None}
 
     # Test match variable
     node = PTestChildMultiAttrs("fooval", "fooval", "bazval", None, origin=origin)
@@ -202,7 +216,7 @@ def test_props_match() -> None:
     matcher = BaseMatcher.from_pattern(rule)
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
-    assert values["foo_val"] == "fooval"
+    assert values == {"foo_val": "fooval"}
 
 
 def test_attr_value_capture() -> None:
@@ -267,6 +281,7 @@ def test_var_match() -> None:
     assert ok
     assert match_dict["cap"] == f1
     assert match_dict["cap_foo"] == "predecessor"
+    assert set(match_dict.keys()) == {"cap", "cap_foo"}
 
     # Now make sure capture variable context is correctly scoped
     node.detach_self()
@@ -280,6 +295,9 @@ def test_var_match() -> None:
     macher = BaseMatcher.from_pattern(rule)
     ok, match_dict = macher.match(node)
     assert ok, f"Didn't match: {rule}"
+    assert match_dict["ch1"] is f1
+    assert match_dict["ch2"] is f2
+    assert set(match_dict.keys()) == {"ch1", "ch2"}
 
     # Second, in alternatives, only the matching capture should be preserved
     rule = '(PTestParent @child1=(PTestChild1 @foo="no match") | (PTestChild1 @foo="predecessor") -> ch1 @child_any -> ch2 @child_tuple=[$ch1 $ch2] -> ch_tup)'
@@ -289,6 +307,53 @@ def test_var_match() -> None:
     assert match_dict["ch1"] is f1
     assert match_dict["ch2"] is f2
     assert match_dict["ch_tup"] == (f3, f4)
+    assert set(match_dict.keys()) == {"ch1", "ch2", "ch_tup"}
+
+    # Third, the outer use of the capture name "wins"
+    rule = "(PTestParent @child1=(PTestChild1 @foo -> cap) -> cap)"
+    macher = BaseMatcher.from_pattern(rule)
+    ok, match_dict = macher.match(node)
+    assert ok, f"Didn't match: {rule}"
+    assert match_dict["cap"] is f1
+    assert set(match_dict.keys()) == {"cap"}
+
+
+def test_multi_capture() -> None:
+    f1 = PTestChild1("predecessor", origin=origin)
+    f2 = f1.duplicate()  # not the same id, but same content
+    only1 = PTestChild2("tail", origin=origin)
+
+    node = PTestParent(
+        child_tuple=(f1, f2, only1),
+        origin=origin,
+    )
+
+    macher = BaseMatcher.from_pattern("(PTestParent @child_tuple=[(*) -> +cap, (*), (*) -> +cap])")
+
+    ok, match_dict = macher.match(node)
+    assert ok
+    assert match_dict == {"cap": (f1, only1)}
+
+    # Now make sure capture variable context is correctly scoped
+    # i.e. discarded alternatives do not pollute the match dict
+    macher = BaseMatcher.from_pattern(
+        # First alternative will partially match, but will be discarded
+        "(PTestParent @child_tuple=[(*) -> +cap, (*) -> cap1]) |"
+        "(PTestParent @child_tuple=[(*) -> +cap, (*), (*) -> +cap])"
+    )
+
+    ok, match_dict = macher.match(node)
+    assert ok
+    assert match_dict == {"cap": (f1, only1)}
+
+    # Test with capturing at multiple levels
+    macher = BaseMatcher.from_pattern(
+        "(PTestParent @child_tuple=[(* @foo -> +cap) -> +cap, * -> +cap])"
+    )
+
+    ok, match_dict = macher.match(node)
+    assert ok
+    assert match_dict == {"cap": ("predecessor", f1, (f2, only1))}
 
 
 def test_sequence_empty_match() -> None:

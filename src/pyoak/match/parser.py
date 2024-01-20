@@ -29,7 +29,7 @@ sequence: "[" (value capture? ","?)* (ANY capture?)? "]"
 
 value: pattern_alt | var | NONE | ESCAPED_STRING
 
-capture: "->" CNAME
+capture: "->" "+"? CNAME
 
 var: "$" CNAME
 
@@ -325,6 +325,7 @@ class TokenType(Enum):
     COMMA = r","
     EQUALS = r"="
     PIPE = r"\|"
+    PLUS = r"\+"
 
 
 def _pretty_print_tok_type(tok_type: TokenType) -> str:
@@ -370,6 +371,8 @@ def _pretty_print_tok_type(tok_type: TokenType) -> str:
             return "'=' (item value separator)"
         case TokenType.PIPE:
             return "'|' (alternative separator)"
+        case TokenType.PLUS:
+            return "'+' (multi capture indicator)"
         case _ as unreachable:
             _assert_never(unreachable)
 
@@ -636,7 +639,12 @@ class Parser:
 
     def _reset(self, text: str) -> None:
         self._lexer = Lexer(text)
-        self._captures_seen: set[str] = set()
+        self._captures_seen: dict[str, bool] = {}
+        """Stores the capture keys seen so far.
+
+        Value is whether the capture is multi or not.
+
+        """
 
     def _get_grammar_error_exception(
         self,
@@ -649,37 +657,49 @@ class Parser:
         if omit_context:
             return ASTXpathOrPatternDefinitionError(msg)
 
+        text_ctx_with_ptr: str | None = None
+        # If we have an actual arg set, calculate the error point
+        # and prepare the text context message
+        if actual is not None:
+            err_point_index = self._lexer.text_pos
+            err_point_length = 1
+
+            if isinstance(actual, Token):
+                err_point_index = actual.start
+                err_point_length = actual.stop - actual.start
+            elif isinstance(actual, TokenType):
+                last_token = self._lexer.last()
+
+                if last_token is not None:
+                    err_point_index = last_token.start
+                    err_point_length = last_token.stop - last_token.start
+
+            # The index to point to is relative to the start of the text context
+            # so we need to subtract the start of the text context
+            err_point_index = max(0, err_point_index - max(0, self._lexer.text_pos - 40))
+
+            text_ctx_with_ptr = point_at_index(
+                self._lexer.text[max(0, self._lexer.text_pos - 40) : self._lexer.text_pos + 40],
+                err_point_index,
+                err_point_length,
+            )
+
         if expected:
             expected_str = ", ".join(_pretty_print_tok_type(tok_type) for tok_type in expected)
 
-            msg += f"\nExpected: {expected_str}"
+            one_of = ""
+            if len(expected) > 1:
+                one_of = " one of"
 
-        err_point_index = self._lexer.text_pos
-        err_point_length = 1
-        if isinstance(actual, Token):
-            msg += f", got: {_pretty_print_tok_type(actual.type)}"
-            err_point_index = actual.start
-            err_point_length = actual.stop - actual.start
-        elif isinstance(actual, TokenType):
-            msg += f", got: {_pretty_print_tok_type(actual)}"
+            msg += f"\nExpected{one_of}: {expected_str}"
 
-            last_token = self._lexer.last()
+            if isinstance(actual, Token):
+                msg += f". Got: {_pretty_print_tok_type(actual.type)}"
+            elif isinstance(actual, TokenType):
+                msg += f". Got: {_pretty_print_tok_type(actual)}"
 
-            if last_token is not None:
-                err_point_index = last_token.start
-                err_point_length = last_token.stop - last_token.start
-
-        # The index to point to is relative to the start of the text context
-        # so we need to subtract the start of the text context
-        err_point_index = max(0, err_point_index - max(0, self._lexer.text_pos - 40))
-
-        text_ctx_with_ptr = point_at_index(
-            self._lexer.text[max(0, self._lexer.text_pos - 40) : self._lexer.text_pos + 40],
-            err_point_index,
-            err_point_length,
-        )
-
-        msg += "\n\nText context:\n" f"{text_ctx_with_ptr}"
+        if text_ctx_with_ptr is not None:
+            msg += "\n\nText context:\n" f"{text_ctx_with_ptr}"
 
         prev_tokens = self._lexer.items[-5:]
 
@@ -689,11 +709,16 @@ class Parser:
 
         return ASTXpathOrPatternDefinitionError(msg)
 
-    def _match_or_raise(self, token_type: TokenType, msg: str) -> Token:
+    def _match_or_raise(
+        self, token_type: TokenType, msg: str, extra_expected: Sequence[TokenType] | None = None
+    ) -> Token:
         """Match the next token or raise an error.
 
         Args:
             token_type (TokenType): the token type to match
+            msg (str): the error message to use if the match fails
+            extra_expected (Sequence[TokenType], optional): extra token types to include in the
+                error message as expected. Defaults to None.
 
         Raises:
             NoMatchError: if the next token does not match the given type
@@ -705,21 +730,31 @@ class Parser:
         try:
             token = self._lexer.match(token_type)
         except NoMatchError as e:
+            expected = [token_type, *extra_expected] if extra_expected else [token_type]
+
             raise self._get_grammar_error_exception(
-                msg, [e.expected], e.actual or TokenType._EOF
+                msg, expected, e.actual or TokenType._EOF
             ) from None
 
         return token
 
-    def _check_and_save_capture_key(self, capture_key: str) -> None:
-        # We didn't allow capture keys to be used more than once previously
-        # This code is left temporarily, in case we want to re-enable this
-        # if capture_key in self._captures_seen:
-        #     raise self._get_grammar_error_exception(
-        #         f"Capture name <{capture_key}> used more than once", [], None
-        #     )
+    def _check_and_save_capture_key(self, capture_key: str, multi_capture: bool) -> None:
+        """Check if the capture key hasn't been already defined with a diifernt type (multi/single).
 
-        self._captures_seen.add(capture_key)
+        Save it if not.
+
+        """
+        if self._captures_seen.get(capture_key, multi_capture) != multi_capture:
+            type_str = "multi" if self._captures_seen[capture_key] else "single"
+
+            raise self._get_grammar_error_exception(
+                f'Name <{capture_key}> is already used as a "{type_str}" type match variable. '
+                "Using the same name to capture a single and multiple values is not allowed",
+                [],
+                self._lexer.last(),
+            )
+
+        self._captures_seen[capture_key] = multi_capture
 
     def _xpath(self) -> Sequence[ASTXpathElement]:
         """xpath: element* self"""
@@ -907,7 +942,7 @@ class Parser:
                 case _:
                     break
 
-        self._match_or_raise(TokenType.RPAREN, err_msg)
+        self._match_or_raise(TokenType.RPAREN, err_msg, [TokenType.AT])
 
         return NodeMatcher(types=tuple(match_types), content=tuple(content))
 
@@ -973,6 +1008,7 @@ class Parser:
         matcher: BaseMatcher = AnyMatcher()
         has_value = False
         capture_key: str | None = None
+        multi_capture = False
 
         match self._lexer.peek():
             case TokenType.EQUALS:
@@ -981,7 +1017,7 @@ class Parser:
                 has_value = True
             case TokenType.CAPTURE_START:
                 self._lexer.consume()
-                capture_key = self._parse_capture_key()
+                capture_key, multi_capture = self._parse_capture_key()
             case _:
                 # Nothing, just a field name
                 pass
@@ -991,19 +1027,31 @@ class Parser:
             match self._lexer.peek():
                 case TokenType.CAPTURE_START:
                     self._lexer.consume()
-                    capture_key = self._parse_capture_key()
+                    capture_key, multi_capture = self._parse_capture_key()
                 case _:
                     # Nothing, just a field name
                     pass
 
         if capture_key is not None:
-            self._check_and_save_capture_key(capture_key)
+            self._check_and_save_capture_key(capture_key, multi_capture)
 
-            return field_name, replace(matcher, name=capture_key)
+            return field_name, replace(matcher, name=capture_key, append_to_match=multi_capture)
 
         return field_name, matcher
 
-    def _parse_capture_key(self) -> str:
+    def _parse_capture_key(self) -> tuple[str, bool]:
+        """Parse a capture key and an optional multi capture indicator.
+
+        Returns:
+            tuple[str, bool]: the capture key and the multi capture indicator
+
+        """
+        multi_capture = False
+
+        if self._lexer.peek() == TokenType.PLUS:
+            self._lexer.consume()
+            multi_capture = True
+
         try:
             capture_key = self._match_or_raise(
                 TokenType.CAPTURE_KEY,
@@ -1014,7 +1062,31 @@ class Parser:
                 f"Incorrect definition of capture key in a tree pattern.\n{e!s}"
             ) from None
 
-        return capture_key
+        return capture_key, multi_capture
+
+    def _parse_variable_ref(self) -> str:
+        """Parse a name (capture key) used as a variable.
+
+        Returns:
+            str: the capture key
+
+        """
+
+        self._match_or_raise(TokenType.DOLLAR, "Incorrect variable reference in a tree pattern.")
+
+        var_name = self._match_or_raise(
+            TokenType.CAPTURE_KEY,
+            "Incorrect definition of capture key in a tree pattern.",
+        ).value
+
+        if var_name not in self._captures_seen:
+            raise self._get_grammar_error_exception(
+                f"Pattern uses match variable <{var_name}> before it was captured",
+                [],
+                self._lexer.last(),
+            )
+
+        return var_name
 
     def _sequence_or_value(self) -> BaseMatcher:
         """(sequence | value)"""
@@ -1039,7 +1111,7 @@ class Parser:
                     "Incorrect definition of field value in a tree pattern. "
                     "Sequence tail marker '*' must be inside [].",
                     [TokenType.LBRACKET],
-                    None,
+                    next_tok,
                 )
             case _ as tok:
                 raise self._get_grammar_error_exception(
@@ -1105,18 +1177,20 @@ class Parser:
                     raise self._get_grammar_error_exception(
                         err_msg,
                         _SEQ_OR_VALUE_FOLLOW_SET,
-                        tok.type if tok else None,
+                        tok,
                     )
 
             next_tok = self._lexer.peek()
 
             if next_tok == TokenType.CAPTURE_START:
                 self._lexer.consume()
-                capture_key = self._parse_capture_key()
+                capture_key, multi_capture = self._parse_capture_key()
 
-                self._check_and_save_capture_key(capture_key)
+                self._check_and_save_capture_key(capture_key, multi_capture)
 
-                matchers[-1] = replace(matchers[-1], name=capture_key)
+                matchers[-1] = replace(
+                    matchers[-1], name=capture_key, append_to_match=multi_capture
+                )
                 next_tok = self._lexer.peek()
 
         self._match_or_raise(
@@ -1135,15 +1209,7 @@ class Parser:
         """
         match self._lexer.peek():
             case TokenType.DOLLAR:
-                self._lexer.consume()
-                var_name = self._parse_capture_key()
-
-                if var_name not in self._captures_seen:
-                    raise self._get_grammar_error_exception(
-                        f"Pattern uses match variable <{var_name}> before it was captured",
-                        [],
-                        None,
-                    )
+                var_name = self._parse_variable_ref()
 
                 return VarMatcher(var_name=var_name)
             case TokenType.CNAME as tok:
@@ -1164,7 +1230,7 @@ class Parser:
                 raise self._get_grammar_error_exception(
                     "Incorrect definition of field value in a tree pattern.",
                     [TokenType.DOLLAR, TokenType.NONE, TokenType.ESCAPED_STRING],
-                    tok.type if tok else None,
+                    tok,
                 )
 
     def parse_xpath(self, xpath: str) -> Sequence[ASTXpathElement]:
