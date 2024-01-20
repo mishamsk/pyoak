@@ -294,7 +294,7 @@ def test_error_reporting():
 
     assert excinfo.value.message.startswith(
         """Incorrect definition of a tree pattern.
-Expected: ')' (pattern end), got: ']' (sequence end)
+Expected one of: ')' (pattern end), '@' (field indicator). Got: ']' (sequence end)
 
 Text context:
 //(TestType ])
@@ -309,7 +309,7 @@ Text context:
 
     assert excinfo.value.message.startswith(
         """Incorrect definition of capture key in a tree pattern.
-Expected: a name (identifier), got: '(' (pattern start)
+Expected: a name (identifier). Got: '(' (pattern start)
 
 Text context:
 )) |(TestType @attr=(TestType @attr -> (* @id -> id)))
@@ -321,7 +321,7 @@ Text context:
 
     assert excinfo.value.message.startswith(
         """Incorrect definition of a tree pattern.
-Expected: ')' (pattern end), got: a name (identifier)
+Expected one of: ')' (pattern end), '@' (field indicator). Got: a name (identifier)
 
 Text context:
 (TestType @attr=(TestType @attr cap))

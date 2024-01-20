@@ -392,7 +392,7 @@ assert ok
 assert match_dict["cap"] == f1
 ```
 
-The result will a tuple: a boolean indicating if the pattern has matched and a match dict.
+The result is a tuple: a boolean indicating if the pattern has matched and a match dict.
 
 The match dict will contain a mapping from capture keys to values. Capture keys are the names you can embed within the pattern to store something within the matched node. E.g.:
 
@@ -403,6 +403,38 @@ matcher = BaseMatcher.from_pattern("(ParentType @child_tuple_field =[(Literal) -
 this pattern matches any subclass of `ParentType` that has a child field `child_tuple_field` which is a sequence, first child of type Literal and then zero or more children of any type and shape.
 
 The capture key `first_child` will be mapped to the first child of the node that matched the pattern and `remaining_children` will be mapped to a tuple of the remaining children.
+
+You can match multiple alternatives using the `|` operator:
+
+```python
+matcher = BaseMatcher.from_pattern("(OneType @attr -> capture) | (AnotherType @other_attr -> capture)")
+```
+
+notice that the capture key is the same in both alternatives. This allows you to match either of the two patterns and get the value of the attribute that matched.
+
+If you want to gather multiple values into a tuple, you can use the `+` operator:
+
+```python
+matcher = BaseMatcher.from_pattern("(OneType @attr1 -> +capture @attr2 -> +capture)")
+```
+
+this will match any subclass of `OneType` that has two attributes `attr1` and `attr2` and will gather both values into a tuple.
+
+Note that you can't use the same capture key with and without `+` in the same pattern.
+
+**Syntax**
+
+The syntax is somewhere between a regular expression and a lisp S-expressions. At the top level you can have a tree or a pattern alternative.
+
+- **Pattern Alternative** (`pattern_alt: tree ("|" tree)*`): You can specify alternatives using the | symbol. This is similar to the | operator in regular expressions, allowing you to match one tree or another.
+- **Tree** (`tree: "(" pattern_class_spec pattern_field_spec* ")"`): A pattern matching a single node (subtree). The tree pattern consists of a class specification (pattern_class_spec) followed by zero or more field specifications (pattern_field_spec) enclosed in parentheses ().
+- **Class Specification** (`pattern_class_spec: "*" | CLASS ("|" CLASS)*`): This is either the wildcard * (matching any class) or one or more class names separated by |. This allows you to specify the type of the node you're matching. The type is matched using isinstance, thus any subclass match.
+- **Field Specification** (`pattern_field_spec: "@" FIELD_NAME ("=" (sequence | value))? capture?`): This is a field name, optionally followed by an = and a sequence (sequence) or value (value), and optionally followed by a capture (capture). This allows you to match specific fields within a node, capture their values.
+- **Sequence** (`sequence: "[" (value capture? ","?)* (ANY capture?)? "]"`): A sequence of values, enclosed in square brackets []. Sequences can optionally end with a wildcard * (meaning match any number of remaining items). This allows you to match sequences of values (nodes or scalars).
+- **Value** (`value: pattern_alt | var | NONE | ESCAPED_STRING`): A value can be a pattern alternative, a variable (var), the keyword None, or a string. This allows you to match specific values or variables.
+- **Capture** (`capture: "->" "+"? CNAME`): Captures are denoted by ->, optionally followed by a +, and a name. Captures allow you to store parts of the matched node for later use. Without "+" the capture will store the last matched value. With "+" the capture will store a tuple of all matched values.
+    - What's last in this context? Matching is done depth-first, left-to-right. So the last value is the outer most right most occurence in the pattern.
+- **Variable** (`var: "$" CNAME`): Variables are denoted by $ followed by a name. This allows you to reference and match against previously captured balue within your patterns.
 
 ### Visitors & Transformers
 

@@ -36,6 +36,16 @@ class BaseMatcher(ABC):
     """
 
     name: str | None = field(default=None, kw_only=True)
+    """Name of the matcher.
+
+    If not None, the matcher will capture the matched value under this name in the context (which is
+    eventually returned as the match dictionary).
+
+    """
+
+    append_to_match: bool = field(default=False, kw_only=True)
+    """If True, the matcher will append the matched value to the list under the name in the context
+    instead of overwriting it."""
 
     @abstractmethod
     def _match(self, value: Any, ctx: _Vars) -> _MatchRes:
@@ -53,7 +63,20 @@ class BaseMatcher(ABC):
         if self.name is None:
             return (True, new_vars)
 
-        return (True, {self.name: value, **new_vars})
+        if self.append_to_match:
+            vals_in_ctx = ctx.get(self.name, ())
+            vals_in_new_vars = new_vars.get(self.name, ())
+
+            if not isinstance(vals_in_ctx, Sequence) or not isinstance(vals_in_new_vars, Sequence):
+                raise ValueError(
+                    f"Matcher {self.name} is set to append to a match but the captured value "
+                    "so far is not a sequence. This should have been caught during pattern "
+                    "definition parsing. Please report a bug!"
+                )
+
+            return (True, {**new_vars, self.name: (*vals_in_ctx, *vals_in_new_vars, value)})
+
+        return (True, {**new_vars, self.name: value})
 
     @staticmethod
     @lru_cache(maxsize=None)
