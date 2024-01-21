@@ -13,6 +13,7 @@ from typing import (
 )
 
 from pyoak import config
+from pyoak.match.helpers import get_dataclass_field_names
 
 from ..node import ASTNode
 from .error import ASTXpathOrPatternDefinitionError
@@ -391,7 +392,7 @@ class AlternativeMatcher(BaseMatcher):
 
     """
 
-    matchers: tuple[BaseMatcher, ...]
+    matchers: tuple[NodeMatcher | PatternRefMatcher, ...]
 
     def __post_init__(self) -> None:
         if len(self.matchers) == 0:
@@ -409,15 +410,42 @@ class AlternativeMatcher(BaseMatcher):
 @dataclass(frozen=True, slots=True)
 class NodeMatcher(BaseMatcher):
     types: tuple[type[ASTNode], ...]
+    """Tuple of ASTNode types to match against.
+
+    If empty, matches any class.
+
+    """
+
     # Using tuple because stdlib doesn't have immutable mapping
     content: tuple[tuple[str, BaseMatcher], ...]
+    """Tuple of tuples of field names and matchers to match against."""
 
     def __post_init__(self) -> None:
         # Remove duplicates
         object.__setattr__(self, "types", tuple(set(self.types)))
 
+        # Validate types have necessary attributes
+        err_types: dict[type[ASTNode], set[str]] = {}
+
+        expected_fields = {fname for fname, _ in self.content}
+
+        for type_ in self.types:
+            missing = expected_fields - get_dataclass_field_names(type_)
+
+            if missing:
+                err_types[type_] = missing
+
+        if err_types:
+            pretty_list = "\n  - ".join(
+                f"{t.__name__}: {', '.join(sorted(m))}"
+                for t, m in sorted(err_types.items(), key=lambda x: x[0].__name__)
+            )
+            raise ASTXpathOrPatternDefinitionError(
+                f"Pattern uses match types with missing attributes:\n  - {pretty_list}"
+            )
+
     def _match(self, value: Any, ctx: _Vars) -> _MatchRes:
-        if not isinstance(value, self.types):
+        if self.types and not isinstance(value, self.types):
             return (False, {})
 
         # Create local mutable context
@@ -436,6 +464,32 @@ class NodeMatcher(BaseMatcher):
             ret_vars.update(new_vars)
 
         return (True, ret_vars)
+
+
+@dataclass(frozen=True, slots=True)
+class PatternRefMatcher(BaseMatcher):
+    """Matcher that matches a value against a previously defined pattern.
+
+    In pattern DSL, this is represented as `#pattern_name`.
+
+    """
+
+    pattern_name: str
+
+    # We intentionally use mutable mapping here to allow
+    # for forward/circular references. Existance of the pattern
+    # in a map is checked during matching (but also during parsing).
+    # At init time, we don't know all the patterns yet.
+    pattern_alias_map: dict[str, AlternativeMatcher | NodeMatcher]
+
+    def _match(self, value: Any, ctx: _Vars) -> _MatchRes:
+        if self.pattern_name not in self.pattern_alias_map:
+            raise KeyError(
+                f"Unknown pattern reference <{self.pattern_name}>. Did you construct the "
+                "matcher by hand? Make sure to update the pattern alias map!"
+            )
+
+        return self.pattern_alias_map[self.pattern_name].match(value, ctx)
 
 
 def validate_pattern(
