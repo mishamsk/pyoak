@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 _Vars = Mapping[str, Any]
 _MatchRes = tuple[bool, _Vars]
+_SeqMatchRes = tuple[bool, _Vars, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,9 +50,18 @@ class BaseMatcher(ABC):
 
     @abstractmethod
     def _match(self, value: Any, ctx: _Vars) -> _MatchRes:
+        """Internal API to be implemented by concrete matchers.
+
+        Match a value against the pattern and returns whether it had match as well as a dictionary
+        of all captured values by the submatchers. There is no need to add the captured value of
+        this matcher to the dictionary as it will be added by the caller.
+
+        """
         raise NotImplementedError
 
     def match(self, value: Any, ctx: _Vars | None = None) -> _MatchRes:
+        """Match a value against the pattern."""
+
         if ctx is None:
             ctx = {}
 
@@ -119,12 +129,69 @@ class BaseMatcher(ABC):
         return matcher
 
 
+class WildcardMatcher(BaseMatcher, ABC):
+    def _match_seq(self, value: Sequence[Any], ctx: _Vars) -> _SeqMatchRes:
+        """Internal API to be implemented by concrete matchers.
+
+        Unlike regular _match, matches a sequence of values by consuming
+        as many values as needed from the start of the sequence.
+
+        Returns:
+            A tuple of a match result, the number of items "consumed".
+
+        """
+        raise NotImplementedError
+
+    def match_seq(self, value: Sequence[Any], ctx: _Vars | None = None) -> _SeqMatchRes:
+        """Match a sequence of values against the pattern and return the remaining values."""
+        if not isinstance(value, Sequence):
+            raise ValueError("match_seq can only be called on sequences")
+
+        if ctx is None:
+            ctx = {}
+
+        ok, new_vars, consumed = self._match_seq(value, ctx)
+
+        if not ok:
+            return (False, {}, 0)
+
+        store_value = value[:consumed]
+
+        if self.name is None:
+            return (True, new_vars, consumed)
+
+        if self.append_to_match:
+            vals_in_ctx = ctx.get(self.name, ())
+            vals_in_new_vars = new_vars.get(self.name, ())
+
+            if not isinstance(vals_in_ctx, Sequence) or not isinstance(vals_in_new_vars, Sequence):
+                raise ValueError(
+                    f"Matcher {self.name} is set to append to a match but the captured value "
+                    "so far is not a sequence. This should have been caught during pattern "
+                    "definition parsing. Please report a bug!"
+                )
+
+            # In multi capture we extend the list of values
+            return (
+                True,
+                {**new_vars, self.name: (*vals_in_ctx, *vals_in_new_vars, *store_value)},
+                consumed,
+            )
+
+        # In single capture we overwrite the value, so name will map to a sequence
+        return (True, {**new_vars, self.name: store_value}, consumed)
+
+
 @dataclass(frozen=True, slots=True)
-class AnyMatcher(BaseMatcher):
+class AnyMatcher(WildcardMatcher):
     """Matcher that matches any value (`*` in pattern DSL)."""
 
     def _match(self, value: Any, ctx: _Vars) -> _MatchRes:
         return (True, {})
+
+    def _match_seq(self, value: Sequence[Any], ctx: _Vars) -> _SeqMatchRes:
+        # Consumes the entire sequence
+        return True, {}, len(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +272,6 @@ class SequenceMatcher(BaseMatcher):
     """
 
     matchers: tuple[BaseMatcher, ...]
-    tail_matcher: AnyMatcher | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if len(self.matchers) == 0:
@@ -214,45 +280,106 @@ class SequenceMatcher(BaseMatcher):
                 " Use ValueMatcher with empty tuple instead."
             )
 
-        if isinstance(self.matchers[-1], AnyMatcher):
-            object.__setattr__(self, "tail_matcher", self.matchers[-1])
-            object.__setattr__(self, "matchers", self.matchers[:-1])
-
     def _match(self, value: Any, ctx: _Vars) -> _MatchRes:
         if not isinstance(value, Sequence):
             return (False, {})
 
-        any_tail = self.tail_matcher is not None
+        wildcards = any(isinstance(m, WildcardMatcher) for m in self.matchers)
 
-        # If we have any tail, we can match sequence of any length
-        # but if we don't have any tail, we can exit early if the lengths
+        # Short circuit by comparing lengths
+        # If we have no wildcards, we can exit early if the lengths
         # don't match
-        if (not any_tail and len(value) != len(self.matchers)) or (
-            any_tail and len(value) < len(self.matchers)
-        ):
+        if not wildcards and len(value) != len(self.matchers):
             return (False, {})
 
         # Create local mutable context
         local_ctx = dict(ctx)
         ret_vars: dict[str, Any] = {}
 
-        # Start with non-tail matchers
-        for matcher, val in zip(self.matchers, value, strict=False):
-            ok, new_vars = matcher.match(val, local_ctx)
+        tail = value
+        # Iterate over all matchers
+        for matcher in self.matchers:
+            if isinstance(matcher, WildcardMatcher):
+                ok, new_vars, shift = matcher.match_seq(tail, local_ctx)
+            elif tail:
+                ok, new_vars = matcher.match(tail[0], local_ctx)
+                shift = 1
+            else:
+                # Still have matchers but no values left
+                return (False, {})
+
             if not ok:
                 return (False, {})
+
+            tail = tail[shift:]
 
             local_ctx.update(new_vars)
             ret_vars.update(new_vars)
 
-        # If we have any tail, match it against the rest of the sequence
-        if self.tail_matcher:
-            # Any always matches so we only doing this for possible captures
-            _, new_vars = self.tail_matcher.match(value[len(self.matchers) :], local_ctx)
-
-            ret_vars.update(new_vars)
-
         return (True, ret_vars)
+
+
+@dataclass(frozen=True, slots=True)
+class QualifierMatcher(WildcardMatcher):
+    """Matcher that implements regex-like wildcard qualifiers to a value matcher inside of a
+    sequence matcher.
+
+    Specifically:
+        - `*` matches 0 or more times (min=0, max=None)
+        - `+` matches 1 or more times (min=1, max=None)
+        - `?` matches 0 or 1 times (min=0, max=1)
+        - `{n}` matches exactly n times (min=n, max=n)
+        - `{m,n}` matches between m and n times, inclusive (min=m, max=n)
+
+    Matching is greedy and doesn't backtrack. I.e. the following pattern
+    can never match: `(* @foo=[(*)* (OtherNode)])` because the first wildcard
+    will consume the entire sequence.
+
+    In pattern DSL, this is represented as a matcher followed by one of the
+    above quantifiers.
+
+    """
+
+    matcher: BaseMatcher
+    min: int
+    max: int | None
+
+    def __post_init__(self) -> None:
+        if self.max is not None and self.min > self.max:
+            raise ValueError("min must be <= max")
+
+        if self.min < 0:
+            raise ValueError("min must be >= 0")
+
+        if self.max is not None and self.max < 0:
+            raise ValueError("max must be >= 0")
+
+    def _match(self, value: Any, ctx: _Vars) -> _MatchRes:
+        raise NotImplementedError
+
+    def _match_seq(self, value: Sequence[Any], ctx: _Vars) -> _SeqMatchRes:
+        # Create local mutable context
+        local_ctx = dict(ctx)
+        ret_vars: dict[str, Any] = {}
+
+        matched = 0
+
+        for val in value:
+            ok, new_vars = self.matcher.match(val, local_ctx)
+            if not ok:
+                break
+
+            local_ctx.update(new_vars)
+            ret_vars.update(new_vars)
+            matched += 1
+
+            if self.max is not None and matched == self.max:
+                break
+
+        if matched < self.min:
+            return False, {}, 0
+
+        return True, ret_vars, matched
 
 
 @dataclass(frozen=True, slots=True)

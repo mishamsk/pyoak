@@ -346,7 +346,7 @@ Each path is in the format `@parent_field_name[index]type_name_or_pattern` and i
 - The slash is optional at the start of the XPath. If omitted, it is the same as using `//the rest of the path`.
 - `//` is a wildcard (anywhere) that matches any path.
 - `@parent_field_name` and `index` are optional.
-- `type_name_or_pattern` is optional, except for the last path in the XPath.
+- `type_name_or_pattern` is optional, except for the last path in the XPath. It may be a type name or a `tree` from the pattern matching syntax (see below).
 
 Types are instance comparisons, so any subclass matches a type.
 
@@ -426,12 +426,15 @@ Note that you can't use the same capture key with and without `+` in the same pa
 
 The syntax is somewhere between a regular expression and a lisp S-expressions. At the top level you can have a tree or a pattern alternative.
 
-- **Pattern Alternative** (`pattern_alt: tree ("|" tree)*`): You can specify alternatives using the | symbol. This is similar to the | operator in regular expressions, allowing you to match one tree or another.
+- **Pattern Alternative** (`"<" tree ("|" tree)* ">" | tree ("|" tree)*`): You can specify alternatives using the | symbol. This is similar to the | operator in regular expressions, allowing you to match one tree or another.
+    - The use of < and > is optional, but recommended for readability everywhere except at the top level. It also disambiguates the use of value capture: `(* @attr=[(One) | (Two) -> cap])` will capture only if second alternative matches, while `(* @attr=[<(One) | (Two)> -> cap])` will capture if either of the alternatives matches.
 - **Tree** (`tree: "(" pattern_class_spec pattern_field_spec* ")"`): A pattern matching a single node (subtree). The tree pattern consists of a class specification (pattern_class_spec) followed by zero or more field specifications (pattern_field_spec) enclosed in parentheses ().
 - **Class Specification** (`pattern_class_spec: "*" | CLASS ("|" CLASS)*`): This is either the wildcard * (matching any class) or one or more class names separated by |. This allows you to specify the type of the node you're matching. The type is matched using isinstance, thus any subclass match.
-- **Field Specification** (`pattern_field_spec: "@" FIELD_NAME ("=" (sequence | value))? capture?`): This is a field name, optionally followed by an = and a sequence (sequence) or value (value), and optionally followed by a capture (capture). This allows you to match specific fields within a node, capture their values.
-- **Sequence** (`sequence: "[" (value capture? ","?)* (ANY capture?)? "]"`): A sequence of values, enclosed in square brackets []. Sequences can optionally end with a wildcard * (meaning match any number of remaining items). This allows you to match sequences of values (nodes or scalars).
-- **Value** (`value: pattern_alt | var | NONE | ESCAPED_STRING`): A value can be a pattern alternative, a variable (var), the keyword None, or a string. This allows you to match specific values or variables.
+- **Field Specification** (`pattern_field_spec: "@" FIELD_NAME ("=" value)? capture?`): This is a field name, optionally followed by an = and value, and optionally followed by a capture (capture). This allows you to match specific fields within a node and capture their values. If no value is given, it means any value match. This is useful to capture values without checking them.
+- **Value** (`value: sequence | pattern_alt | var | NONE | ESCAPED_STRING`): A value can be a sequence, a pattern alternative, a variable (var), the keyword None, or a string. This allows you to match specific values or variables.
+- **Sequence** (a comma separated list of `value wildcard? capture?` in enclosed in square brackets []): Matches a sequence of values. You can thing of them as regexes without backtracking. Each item is matched greedily, i.e. `[(*)*, (Some)]` can never match, because the first item will always consume everything, leavining nothing to match against `(Some)`.
+    - Sequences can optionally end with a shorthand `*` which is equivalent to `(*)*`.
+- **Wildcard** (`"?" | "*" | "+" | "{" DIGIT+ ("," DIGIT+)? "}"`): This has the same meaning as in regex: `?` zero of one, `*` zero or more, `+` one or more, `{n}` exactly n, `{m,n}` between m and n inclusive.
 - **Capture** (`capture: "->" "+"? CNAME`): Captures are denoted by ->, optionally followed by a +, and a name. Captures allow you to store parts of the matched node for later use. Without "+" the capture will store the last matched value. With "+" the capture will store a tuple of all matched values.
     - What's last in this context? Matching is done depth-first, left-to-right. So the last value is the outer most right most occurence in the pattern.
 - **Variable** (`var: "$" CNAME`): Variables are denoted by $ followed by a name. This allows you to reference and match against previously captured balue within your patterns.
