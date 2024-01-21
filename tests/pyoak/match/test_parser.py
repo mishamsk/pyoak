@@ -170,6 +170,28 @@ def test_lookahead_queue_match():
     assert exc_info.value.actual == 3
 
 
+def test_lookahead_queue_match_any():
+    queue = IntLAQueue([1, 2, 3], 0)
+
+    assert queue.match_any([1, 2, 3]) == 1
+
+    with pytest.raises(NoMatchError) as exc_info:
+        # 3 is not next item
+        queue.match_any([3])
+
+    assert exc_info.value.expected == [3]
+    assert exc_info.value.actual == 2
+
+    assert queue.match_any([2]) == 2
+
+    with pytest.raises(NoMatchError) as exc_info:
+        # try a different type
+        queue.match_any(["2"])
+
+    assert exc_info.value.expected == ["2"]
+    assert exc_info.value.actual == 3
+
+
 def test_token_equality():
     token1 = Token(TokenType.CNAME, "test", 0, 4, 1, 0, "test text")
     token2 = Token(TokenType.CNAME, "test", 2, 6, 1, 2, "test text")
@@ -218,6 +240,9 @@ def test_advance_pos():
     assert lexer._cur_column == 1
 
 
+ALL_LEXEMS = '($None"test\\"test"[as,with,none,assuf,withsuf'
+
+
 @pytest.mark.parametrize(
     "text,expected,mode",
     [
@@ -254,13 +279,22 @@ def test_advance_pos():
             LexerMode.REGULAR,
         ),
         (
-            '($None"test\\"test"[',
+            '($None"test\\"test"[as,with,none,assuf,withsuf',
             [
-                Token(TokenType.LPAREN, "(", 0, 1, 1, 0, '($None"test\\"test"['),
-                Token(TokenType.DOLLAR, "$", 1, 2, 1, 1, '($None"test\\"test"['),
-                Token(TokenType.CNAME, "None", 2, 6, 1, 2, '($None"test\\"test"['),
-                Token(TokenType.ESCAPED_STRING, 'test\\"test', 6, 18, 1, 6, '($None"test\\"test"['),
-                Token(TokenType.LBRACKET, "[", 18, 19, 1, 18, '($None"test\\"test"['),
+                Token(TokenType.LPAREN, "(", 0, 1, 1, 0, ALL_LEXEMS),
+                Token(TokenType.DOLLAR, "$", 1, 2, 1, 1, ALL_LEXEMS),
+                Token(TokenType.NONE, "None", 2, 6, 1, 2, ALL_LEXEMS),
+                Token(TokenType.ESCAPED_STRING, 'test\\"test', 6, 18, 1, 6, ALL_LEXEMS),
+                Token(TokenType.LBRACKET, "[", 18, 19, 1, 18, ALL_LEXEMS),
+                Token(TokenType.AS, "as", 19, 21, 1, 19, ALL_LEXEMS),
+                Token(TokenType.COMMA, ",", 21, 22, 1, 21, ALL_LEXEMS),
+                Token(TokenType.WITH, "with", 22, 26, 1, 22, ALL_LEXEMS),
+                Token(TokenType.COMMA, ",", 26, 27, 1, 26, ALL_LEXEMS),
+                Token(TokenType.CNAME, "none", 27, 31, 1, 27, ALL_LEXEMS),
+                Token(TokenType.COMMA, ",", 31, 32, 1, 31, ALL_LEXEMS),
+                Token(TokenType.CNAME, "assuf", 32, 37, 1, 32, ALL_LEXEMS),
+                Token(TokenType.COMMA, ",", 37, 38, 1, 37, ALL_LEXEMS),
+                Token(TokenType.CNAME, "withsuf", 38, 45, 1, 38, ALL_LEXEMS),
             ],
             LexerMode.REGULAR,
         ),
