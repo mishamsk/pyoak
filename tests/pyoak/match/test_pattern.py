@@ -138,10 +138,22 @@ class Lit(Expr):
             "(PTestParent @child_tuple=[(PTestChild1){5} -> cap]) | "
             "(PTestParent @child_tuple=[(PTestChild1){2,5} -> +capm])",
         ),
+        (
+            "reserved_words_as_names",
+            "(With @with -> with @as -> as @None -> None) | "
+            "(As @with -> with @as -> as @None -> None)",
+        ),
     ],
     ids=lambda p: f"test_pattern_{p}" if not p.startswith("(") else "",
 )
-def test_correct_pattern_grammar(rule: str, pattern_def: str) -> None:
+def test_correct_pattern_grammar(rule: str, pattern_def: str, clean_ser_types) -> None:
+    # These are used for tests with reserved words as class names. Don't remove
+    class With(ASTNode):
+        pass
+
+    class As(ASTNode):
+        pass
+
     res, msg = validate_pattern(pattern_def)
     assert res, f"Error in rule {rule}: {msg}"
 
@@ -158,7 +170,7 @@ def test_correct_pattern_grammar(rule: str, pattern_def: str) -> None:
             "##empty_value",
             "(PTestChild1 @foo=)",
             "Expected one of: '[' (sequence start), '(' (pattern start), '<' (alternative boundary start)"
-            ", '$' (variable indicator), a name (identifier), an escaped string (possibly a regex). "
+            ", '$' (variable indicator), 'None', an escaped string (possibly a regex). "
             "Got: ')' (pattern end)",
         ),
         (
