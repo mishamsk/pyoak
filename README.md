@@ -414,16 +414,82 @@ this will match any subclass of `OneType` that has two attributes `attr1` and `a
 
 Note that you can't use the same capture key with and without `+` in the same pattern.
 
+**Pattern Aliases**
+
+And if you want to go all out, you can even use pattern aliases, including recursive ones:
+
+Try running this in your Python interpreter:
+```python
+from dataclasses import dataclass, field
+from typing import Any
+
+from pyoak.match.pattern import BaseMatcher
+from pyoak.node import ASTNode
+from pyoak.origin import NO_ORIGIN, Origin
+
+
+@dataclass
+class Expr(ASTNode):
+    origin: Origin = field(default=NO_ORIGIN, init=False)
+
+
+@dataclass
+class BinOp(Expr):
+    left: Expr
+    op: str
+    right: Expr
+
+
+@dataclass
+class Lit(Expr):
+    val: Any
+
+
+# Create a binary tree
+node = BinOp(
+    left=BinOp(
+        left=BinOp(left=Lit(1), op="+", right=Lit(2)),
+        op="+",
+        right=Lit(3),
+    ),
+    op="+",
+    right=Lit(4),
+)
+
+rule = (
+    "WITH "
+    "lit as (Lit @val -> +vals),"
+    'rec as <(BinOp @left=#rec @op="\\+" @right=#rec) | #lit>'
+    "#rec"
+)
+
+matcher = BaseMatcher.from_pattern(rule)
+ok, match_dict = matcher.match(node)
+assert sum(match_dict["vals"]) == 10
+print(sum(match_dict["vals"]))
+
+```
+
 **Syntax**
 
-The syntax is somewhere between a regular expression and a lisp S-expressions. At the top level you can have a tree or a pattern alternative.
+The syntax is somewhere between a regular expression and a lisp S-expressions with a bit of SQL CTE for pattern alias definition.
 
-- **Pattern Alternative** (`"<" tree ("|" tree)* ">" | tree ("|" tree)*`): You can specify alternatives using the | symbol. This is similar to the | operator in regular expressions, allowing you to match one tree or another.
+At the top level you can have a list of alias definitions, followed by a alternative pattern or just a single tree pattern.
+
+Here is the full syntax:
+
+- **Pattern With Aliases** (`("WITH" pattern_alias_def ("," pattern_alias_def)*)? pattern_alt`). This is a pattern with optional aliases. The aliases are defined using the WITH keyword, followed by one or more pattern_alias_def separated by commas, followed by a pattern alternative.
+- **Pattern Alias Definition** (`CNAME "AS" pattern_alt`). One pattern alias definition consists of an alias name, followed by the AS keyword, followed by a pattern alternative. The alias name can be any valid Python identifier. Alias name can only be defined once.
+- **Pattern Alternative** (`"<" tree_or_ref ("|" tree_or_ref)* ">" | tree_or_ref ("|" tree_or_ref)*`): You can specify alternatives using the | symbol. This is similar to the | operator in regular expressions, allowing you to match one tree or another.
     - The use of < and > is optional, but recommended for readability everywhere except at the top level. It also disambiguates the use of value capture: `(* @attr=[(One) | (Two) -> cap])` will capture only if second alternative matches, while `(* @attr=[<(One) | (Two)> -> cap])` will capture if either of the alternatives matches.
-- **Tree** (`tree: "(" pattern_class_spec pattern_field_spec* ")"`): A pattern matching a single node (subtree). The tree pattern consists of a class specification (pattern_class_spec) followed by zero or more field specifications (pattern_field_spec) enclosed in parentheses ().
+    - Either a tree or a reference to a an alias can be used as an alternative. References in WITH section may not be defined yet, but must be defined somewhere in WITH section. This allows you to define recursive patterns.
+- **Pattern Reference** (`pattern_ref: "#" CNAME`): Specifies a reference to a pattern defined in the WITH block.
+- **Tree** (`tree: "(" pattern_class_spec? pattern_field_spec* ")" capture?`): A pattern matching a single node (subtree). The tree pattern consists of an option class specification (pattern_class_spec) followed by zero or more field specifications (pattern_field_spec) enclosed in parentheses ().
 - **Class Specification** (`pattern_class_spec: "*" | CLASS ("|" CLASS)*`): This is either the wildcard * (matching any class) or one or more class names separated by |. This allows you to specify the type of the node you're matching. The type is matched using isinstance, thus any subclass match.
+    - The wildcard `*` is a legacy syntax. If you want to match any class, you may omit the class specification altogether.
 - **Field Specification** (`pattern_field_spec: "@" FIELD_NAME ("=" value)? capture?`): This is a field name, optionally followed by an = and value, and optionally followed by a capture (capture). This allows you to match specific fields within a node and capture their values. If no value is given, it means any value match. This is useful to capture values without checking them.
-- **Value** (`value: sequence | pattern_alt | var | NONE | ESCAPED_STRING`): A value can be a sequence, a pattern alternative, a variable (var), the keyword None, or a string. This allows you to match specific values or variables.
+    - Note, that if class specification lists concrete classes, then all of these classes must have the field. This is enforced at parse time.
+- **Value** (`value: sequence | pattern_alt_or_ref | var | NONE | ESCAPED_STRING`): A value can be a sequence, a pattern alternative, a variable (var), the keyword None, or a string. This allows you to match specific values or variables.
 - **Sequence** (a comma separated list of `value wildcard? capture?` in enclosed in square brackets []): Matches a sequence of values. You can thing of them as regexes without backtracking. Each item is matched greedily, i.e. `[(*)*, (Some)]` can never match, because the first item will always consume everything, leavining nothing to match against `(Some)`.
     - Sequences can optionally end with a shorthand `*` which is equivalent to `(*)*`.
 - **Wildcard** (`"?" | "*" | "+" | "{" DIGIT+ ("," DIGIT+)? "}"`): This has the same meaning as in regex: `?` zero of one, `*` zero or more, `+` one or more, `{n}` exactly n, `{m,n}` between m and n inclusive.

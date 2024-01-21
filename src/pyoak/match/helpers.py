@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import fields
+from functools import lru_cache
 from typing import Any, Mapping, Type
 
 from ..node import ASTNode
@@ -17,6 +19,11 @@ def check_and_get_ast_node_type(
         return None, f"<{class_name}> is not an AST type"
     else:
         return type_, ""
+
+
+@lru_cache(maxsize=None)
+def get_dataclass_field_names(type_: type[Any]) -> set[str]:
+    return {field.name for field in fields(type_)}
 
 
 def point_at_index(input_string: str, index: int, length: int = 1) -> str:

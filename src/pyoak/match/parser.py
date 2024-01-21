@@ -21,13 +21,13 @@ with_pattern: ("WITH" pattern_alias_def ("," pattern_alias_def)*)? pattern_alt
 
 pattern_alias_def: CNAME "AS" pattern_alt
 
-pattern_or_alias: pattern_alt | pattern_ref
+pattern_alt: "<" tree_or_ref ("|" tree_or_ref)* ">" | tree_or_ref ("|" tree_or_ref)*
+
+tree_or_ref: tree | pattern_ref
 
 pattern_ref: "#" CNAME
 
-pattern_alt: "<" tree ("|" tree)* ">" | tree ("|" tree)*
-
-tree: "(" pattern_class_spec pattern_field_spec* ")" capture?
+tree: "(" pattern_class_spec? pattern_field_spec* ")" capture?
 
 pattern_class_spec: ANY | CLASS ("|" CLASS)*
 
@@ -38,7 +38,7 @@ sequence:
     | "[" ANY capture? "]"
     | "[" value wildcard? capture? ("," value wildcard? capture?)* (","  ANY capture?)? "]"
 
-value: sequence | pattern_alt | var | NONE | ESCAPED_STRING
+value: sequence | pattern_alt_or_ref | var | NONE | ESCAPED_STRING
 
 wildcard: "?" | "*" | "+" | "{" DIGIT+ ("," DIGIT+)? "}"
 
@@ -92,6 +92,7 @@ from .pattern import (
     AnyMatcher,
     BaseMatcher,
     NodeMatcher,
+    PatternRefMatcher,
     QualifierMatcher,
     RegexMatcher,
     SequenceMatcher,
@@ -374,6 +375,7 @@ class TokenType(Enum):
     QMARK = r"\?"
     LCURLY = r"{"
     RCURLY = r"}"
+    HASH = r"#"
 
 
 def _pretty_print_tok_type(tok_type: TokenType) -> str:
@@ -435,6 +437,8 @@ def _pretty_print_tok_type(tok_type: TokenType) -> str:
             return "'{' (wildcard range start)"
         case TokenType.RCURLY:
             return "'}' (wildcard range end)"
+        case TokenType.HASH:
+            return "'#' (pattern ref start)"
         case _ as unreachable:
             _assert_never(unreachable)
 
@@ -483,6 +487,7 @@ _VALUE_START_SET = (
     TokenType.LBRACKET,  # sequence start
     TokenType.LPAREN,  # tree/alternative start
     TokenType.LT,  # tree/alternative start
+    TokenType.HASH,  # pattern ref start
     TokenType.DOLLAR,  # variable indicator
     TokenType.NONE,  # None
     TokenType.ESCAPED_STRING,  # escaped string
@@ -571,14 +576,27 @@ class UnexpectedCharactersError(Exception):
     def __str__(self) -> str:
         msg = f"No matching token found at line {self.cur_line}, column {self.cur_column}\n\n"
 
+        err_point_index = self.text_pos
+        err_point_length = 1
+
+        # The index to point to is relative to the start of the text context
+        # so we need to subtract the start of the text context
+        err_point_index = max(0, err_point_index - max(0, self.text_pos - 40))
+
+        text_ctx_with_ptr = point_at_index(
+            self.text[max(0, self.text_pos - 40) : self.text_pos + 40],
+            err_point_index,
+            err_point_length,
+        )
+
+        msg += f"Text content:\n{text_ctx_with_ptr}\n\n"
+
         prev_tokens = self.previous_tokens[-5:]
 
         if prev_tokens:
             msg += "Previous tokens:\n"
             msg += "\n".join(f"{token!r}" for token in prev_tokens)
             msg += "\n\n"
-
-        msg += f"Text content:\n{self.text[self.text_pos-20:self.text_pos+20]}\n"
 
         return msg
 
@@ -715,11 +733,33 @@ class Parser:
         self._reset("")
 
     def _reset(self, text: str) -> None:
+        if not isinstance(text, str):
+            raise ASTXpathOrPatternDefinitionError(
+                f"Expected pattern to be a string, got {type(text).__name__!r}"
+            )
+
         self._lexer = Lexer(text)
         self._captures_seen: dict[str, bool] = {}
         """Stores the capture keys seen so far.
 
         Value is whether the capture is multi or not.
+
+        """
+
+        # We do not use clear, because the dict must survive parsing
+        self.pattern_alias_map: dict[str, AlternativeMatcher | NodeMatcher] = {}
+        """Stores the pattern aliases mapping to their matcher objects during parsing.
+
+        This is used both as a cache to replace references inlined in the pattern, as well as alias
+        map stored in PatternRefMatcher which remain when alias is recursively referenced.
+
+        """
+
+        self.pattern_refs_used: set[str] = set()
+        """Stores the pattern aliases used by generated PatternRefMatcher.
+
+        Used to remove the aliases that are not used in the pattern and check that all refs are
+        valid.
 
         """
 
@@ -999,9 +1039,9 @@ class Parser:
 
         return type_
 
-    def _pattern_alt(self) -> AlternativeMatcher | NodeMatcher:
-        """pattern_alt: tree ("|" tree)*"""
-        matchers: list[NodeMatcher] = []
+    def _pattern_alt(self) -> AlternativeMatcher | NodeMatcher | PatternRefMatcher:
+        """pattern_alt: "<" tree_or_ref ("|" tree_or_ref)* ">" | tree_or_ref ("|" tree_or_ref)*"""
+        matchers: list[NodeMatcher | PatternRefMatcher] = []
 
         has_bound = False
         if self._lexer.peek() == TokenType.LT:
@@ -1009,7 +1049,13 @@ class Parser:
             self._lexer.consume()
 
         while not self._lexer.hit_eoq:
-            matchers.append(self._tree())
+            matcher = self._tree_or_ref()
+
+            if isinstance(matcher, AlternativeMatcher):
+                # Flatten the alternative
+                matchers.extend(matcher.matchers)
+            else:
+                matchers.append(matcher)
 
             if self._lexer.peek() != TokenType.PIPE:
                 break
@@ -1031,7 +1077,7 @@ class Parser:
         return AlternativeMatcher(matchers=tuple(matchers))
 
     def _tree(self) -> NodeMatcher:
-        """tree: "(" class_spec field_spec* ")" """
+        """tree: "(" pattern_class_spec pattern_field_spec* ")" capture?"""
         err_msg = "Incorrect definition of a tree pattern."
         self._match_or_raise(TokenType.LPAREN, err_msg)
 
@@ -1073,38 +1119,31 @@ class Parser:
         # First check if this is ANY
         if self._lexer.peek() == TokenType.STAR:
             self._lexer.consume()
-            return [ASTNode]
+            return []
 
-        # Ok, now we may only have class names
-        # And we must have at least one
-        expect_class_name = True
+        # Ok, now we may only have class names or attr, tree end
+        if self._lexer.peek() in (TokenType.CNAME, TokenType.NONE, TokenType.WITH, TokenType.AS):
+            class_names.append(
+                # we could have used just consume, but type checker will complain
+                self._match_or_raise(
+                    (TokenType.CNAME, TokenType.NONE, TokenType.WITH, TokenType.AS),
+                    "Incorrect definition of class name in a tree pattern.",
+                ).value
+            )
 
-        while not self._lexer.hit_eoq:
-            if expect_class_name:
+            while not self._lexer.hit_eoq:
+                match self._lexer.peek():
+                    case TokenType.PIPE:
+                        self._lexer.consume()
+                    case _:
+                        break
+
                 class_names.append(
                     self._match_or_raise(
                         (TokenType.CNAME, TokenType.NONE, TokenType.WITH, TokenType.AS),
                         "Incorrect definition of class name in a tree pattern.",
                     ).value
                 )
-
-                expect_class_name = False
-                continue
-
-            match self._lexer.peek():
-                case TokenType.PIPE:
-                    self._lexer.consume()
-                    expect_class_name = True
-                    continue
-                case _:
-                    break
-
-        if not class_names:
-            raise self._get_grammar_error_exception(
-                "Incorrect definition of class name in a tree pattern. ",
-                [TokenType.CNAME, TokenType.STAR],
-                None,
-            )
 
         for class_name in class_names:
             type_, msg = check_and_get_ast_node_type(class_name, self._types)
@@ -1281,7 +1320,7 @@ class Parser:
         match next_tok:
             case TokenType.LBRACKET:
                 return self._sequence()
-            case TokenType.LPAREN | TokenType.LT:
+            case TokenType.LPAREN | TokenType.LT | TokenType.HASH:
                 return self._pattern_alt()
             case TokenType.DOLLAR | TokenType.NONE | TokenType.ESCAPED_STRING:
                 return self._simple_value()
@@ -1321,6 +1360,7 @@ class Parser:
                     TokenType.LBRACKET  # sequence start
                     | TokenType.LPAREN  # tree/alternative start
                     | TokenType.LT  # tree/alternative start
+                    | TokenType.HASH  # pattern ref start
                     | TokenType.DOLLAR  # variable indicator
                     | TokenType.NONE  # None
                     | TokenType.ESCAPED_STRING  # escaped string
@@ -1386,13 +1426,117 @@ class Parser:
                 return ValueMatcher(value=None)
             case TokenType.ESCAPED_STRING:
                 tok = self._lexer.consume()
-                return RegexMatcher(_re_str=tok.value)
+                try:
+                    return RegexMatcher(_re_str=tok.value)
+                except re.error as e:
+                    raise self._get_grammar_error_exception(
+                        f"Incorrect definition of field value in a tree pattern. "
+                        f"Invalid regex string <{tok.value!r}>: {e!s}",
+                        [],
+                        tok,
+                    ) from None
             case _ as tok:
                 raise self._get_grammar_error_exception(
                     "Incorrect definition of field value in a tree pattern.",
                     [TokenType.DOLLAR, TokenType.NONE, TokenType.ESCAPED_STRING],
                     tok,
                 )
+
+    def _pattern_alias_def(self) -> None:
+        """pattern_alias_def: CNAME "AS" pattern_alt"""
+        pattern_name = self._match_or_raise(
+            (TokenType.CNAME, TokenType.NONE, TokenType.WITH, TokenType.AS),
+            "Incorrect pattern alias definition.",
+        ).value
+
+        if pattern_name in self.pattern_alias_map:
+            raise ASTXpathOrPatternDefinitionError(
+                f"Pattern alias <{pattern_name}> is already defined"
+            )
+
+        self._match_or_raise(TokenType.AS, "Incorrect pattern alias definition.")
+
+        matcher = self._pattern_alt()
+
+        if isinstance(matcher, PatternRefMatcher):
+            # This means an alias to an alias, silly, don't allow it
+            raise ASTXpathOrPatternDefinitionError(
+                f"Pattern alias <{pattern_name}> is an alias to another alias <{matcher.pattern_name}>. "
+                f"This is not allowed, just use the <{matcher.pattern_name}>."
+            )
+
+        self.pattern_alias_map[pattern_name] = matcher
+
+    def _pattern_ref(self) -> AlternativeMatcher | NodeMatcher | PatternRefMatcher:
+        """pattern_ref: "#" CNAME"""
+        self._match_or_raise(TokenType.HASH, "Incorrect pattern reference definition.")
+
+        pattern_name = self._match_or_raise(
+            (TokenType.CNAME, TokenType.NONE, TokenType.WITH, TokenType.AS),
+            "Incorrect pattern reference definition.",
+        ).value
+
+        if pattern_name not in self.pattern_alias_map:
+            # This is a pattern ref, but the pattern is not defined yet
+            # which means either a recursive reference or a reference to a pattern
+            # defined later. In this case we create a genuine PatternRefMatcher
+
+            # We use the shared mutable mapping of pattern aliases
+            # this way it will eventually be populated with the referenced pattern
+            # by the time of matching
+            pattern_ref = PatternRefMatcher(pattern_name, self.pattern_alias_map)
+
+            # Add it to the set of refs used, so that we can remove unused aliases
+            # and check that this reference was eventually defined
+            self.pattern_refs_used.add(pattern_name)
+
+            return pattern_ref
+
+        # If the referenced pattern is already defined, we can "inline" it
+        # no need to create a PatternRefMatcher
+        return self.pattern_alias_map[pattern_name]
+
+    def _tree_or_ref(self) -> AlternativeMatcher | NodeMatcher | PatternRefMatcher:
+        """tree_or_ref: tree | pattern_ref"""
+        if self._lexer.peek() == TokenType.HASH:
+            return self._pattern_ref()
+
+        return self._tree()
+
+    def _with_pattern(self) -> AlternativeMatcher | NodeMatcher:
+        """with_pattern: ("WITH" pattern_alias_def ("," pattern_alias_def)*)? pattern_alt"""
+
+        if self._lexer.peek() == TokenType.WITH:
+            self._lexer.consume()
+
+            # Pattern aliases do not return anything, they just populate the pattern_alias_map
+            self._pattern_alias_def()
+
+            while self._lexer.peek() == TokenType.COMMA:
+                self._lexer.consume()
+                self._pattern_alias_def()
+
+        ret = self._pattern_alt()
+
+        # Check that all pattern refs are valid
+        if self.pattern_refs_used - set(self.pattern_alias_map):
+            raise ASTXpathOrPatternDefinitionError(
+                f"Pattern alias(es) <{', '.join(sorted(self.pattern_refs_used))}> are referenced but not defined"
+            )
+
+        # Remove all patterns aliases that were inlined in the pattern
+        # and are not used by any other pattern
+        for alias in list(self.pattern_alias_map.keys()):
+            if alias not in self.pattern_refs_used:
+                self.pattern_alias_map.pop(alias)
+
+        if isinstance(ret, PatternRefMatcher):
+            # This should not happen, must be a bug
+            raise ASTXpathOrPatternDefinitionError(
+                "Internal error: pattern ref returned instead of a pattern. Please report it!"
+            )
+
+        return ret
 
     def parse_xpath(self, xpath: str) -> Sequence[ASTXpathElement]:
         """Public API to parse an xpath.
@@ -1441,7 +1585,7 @@ class Parser:
         self._reset(pattern)
 
         try:
-            ret = self._pattern_alt()
+            ret = self._with_pattern()
 
             # This is the top-level alternative, so it must be the last thing in the pattern
             if not self._lexer.hit_eoq and (next_tok := self._lexer.peek()):

@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from pyoak.match.pattern import BaseMatcher, validate_pattern
 from pyoak.node import ASTNode
-from pyoak.origin import NO_ORIGIN
+from pyoak.origin import NO_ORIGIN, Origin
 
 origin = NO_ORIGIN
 
@@ -34,7 +34,7 @@ class PTestParent(ASTNode):
 
 @dataclass
 class Expr(ASTNode):
-    pass
+    origin: Origin = field(default=NO_ORIGIN, init=False)
 
 
 @dataclass
@@ -59,6 +59,7 @@ class Lit(Expr):
     "rule, pattern_def",
     [
         ("any_class", "(*)"),
+        ("any_class_new", "()"),
         ("top_level_cap", "(*) -> cap"),
         ("class_only", "(PTestParent)"),
         ("multi_class", "(PTestParent | PTestChild1)"),
@@ -140,74 +141,122 @@ class Lit(Expr):
         ),
         (
             "reserved_words_as_names",
-            "(With @with -> with @as -> as @None -> None) | "
-            "(As @with -> with @as -> as @None -> None)",
+            "(With @with_suf -> with @as_suf -> as @None_suf -> None) | "
+            "(As @with_suf -> with @as_suf -> as @None_suf -> None)",
+        ),
+        (
+            "with_pattern",
+            "wiTh "  # check case insensitivity
+            "lit as (Lit @val -> +vals),"
+            'rec as <(BinOp @left=#rec @op="\\+" @right=#rec) | #lit>'
+            "#rec",
         ),
     ],
     ids=lambda p: f"test_pattern_{p}" if not p.startswith("(") else "",
 )
 def test_correct_pattern_grammar(rule: str, pattern_def: str, clean_ser_types) -> None:
     # These are used for tests with reserved words as class names. Don't remove
+    @dataclass
     class With(ASTNode):
-        pass
+        with_suf: str
+        as_suf: str
+        None_suf: str
 
+    @dataclass
     class As(ASTNode):
-        pass
+        with_suf: str
+        as_suf: str
+        None_suf: str
 
     res, msg = validate_pattern(pattern_def)
     assert res, f"Error in rule {rule}: {msg}"
 
 
 @pytest.mark.parametrize(
-    "rule, pattern_def, expected_msg",
+    "pattern, expected_msg",
     [
         (
-            "##empty",
+            (),
+            "Expected pattern to be a string, got 'tuple'",
+        ),
+        (
             "",
             "Empty pattern definition. Make sure to include at least one tree pattern.",
         ),
         (
-            "##empty_value",
+            "(Expr|BinOp @left @rght)",
+            "Pattern uses match types with missing attributes:"
+            "\n  - BinOp: rght"
+            "\n  - Expr: left, rght",
+        ),
+        (
+            "(@foo -> 1cap)",
+            "Incorrect definition of capture key in a tree pattern.\n"
+            "Expected: a name (identifier). Got: a number",
+        ),
+        (
+            "(@foo=%)",
+            "Incorrect definition of field value in a tree pattern.\n"
+            "No matching token found at line 1, column 6",
+        ),
+        (
+            '(PTestParent @foo="+")',
+            "Incorrect definition of field value in a tree pattern. Invalid regex string <'+'>: nothing to repeat at position 0",
+        ),
+        (
             "(PTestChild1 @foo=)",
+            "Incorrect definition of field value in a tree pattern. \n"
             "Expected one of: '[' (sequence start), '(' (pattern start), '<' (alternative boundary start)"
-            ", '$' (variable indicator), 'None', an escaped string (possibly a regex). "
+            ", '#' (pattern ref start), '$' (variable indicator), 'None', an escaped string (possibly a regex). "
             "Got: ')' (pattern end)",
         ),
         (
-            "##seq_val_after_any",
             "(PTestParent @child_tuple=[* (PTestChild1)])",
             "Incorrect definition of sequence in a tree pattern.\n"
             "Expected: ']' (sequence end). Got: '(' (pattern start)",
         ),
         (
-            "##any_and_multi_class",
             "(* | PTestChild1)",
+            "Incorrect definition of a tree pattern.\n"
             "Expected one of: ')' (pattern end), '@' (field indicator). Got: '|' (alternative separator)",
         ),
         (
-            "##extra_rbracket",
             '(PTestParent @foo="val" -> same_val  @bar="barval" -> same_val])',
+            "Incorrect definition of a tree pattern.\n"
             "Expected one of: ')' (pattern end), '@' (field indicator). Got: ']' (sequence end)",
         ),
         (
-            "##two_attr_var_before_cap",
             '(PTestParent @foo= $same_val  bar="barval" -> same_val])',
             "Pattern uses match variable <same_val> before it was captured",
         ),
         (
-            "##mixed_cap_var_type",
             "(PTestParent @foo -> cap @bar -> +cap])",
             'Name <cap> is already used as a "single" type match variable.'
             " Using the same name to capture a single and multiple values is not allowed",
         ),
+        (
+            "with alias as (), alias as (@foo)",
+            "Pattern alias <alias> is already defined",
+        ),
+        (
+            "with as ()",
+            "Incorrect pattern alias definition.\nExpected: 'AS'. Got: '(' (pattern start)",
+        ),
+        (
+            "with alias as #forwalias, forwalias as () #alias",
+            "Pattern alias <alias> is an alias to another alias <forwalias>. "
+            "This is not allowed, just use the <forwalias>.",
+        ),
+        (
+            "#one | #two",
+            "Pattern alias(es) <one, two> are referenced but not defined",
+        ),
     ],
-    # will effectively use the rule name as the test name
-    ids=lambda p: f"test_pattern_{p[2:]}" if p.startswith("##") else "",
 )
-def test_incorrect_pattern_grammar(rule: str, pattern_def: str, expected_msg: str) -> None:
-    res, msg = validate_pattern(pattern_def)
+def test_incorrect_pattern_grammar(pattern: str, expected_msg: str) -> None:
+    res, msg = validate_pattern(pattern)
     assert not res
-    assert expected_msg in msg
+    assert expected_msg == msg[: len(expected_msg)], pattern
 
 
 def test_props_match_and_capture(clean_ser_types) -> None:
@@ -249,7 +298,7 @@ def test_props_match_and_capture(clean_ser_types) -> None:
     assert values == {"foo_val": "fooval"}
 
     # check non-existent attribute
-    rule = "(Node @non_existent)"
+    rule = "(* @non_existent)"
     matcher = BaseMatcher.from_pattern(rule)
     ok, values = matcher.match(node)
     assert not ok, f"Matched, but wasn't supposed to: {rule}"
@@ -580,3 +629,32 @@ def test_same_name_capture() -> None:
     assert ok, f"Didn't match: {rule}"
     assert match_dict["cap"] is node
     assert set(match_dict.keys()) == {"cap"}
+
+
+def test_with_patter() -> None:
+    # Create a binary tree
+    node = BinOp(
+        left=BinOp(
+            left=BinOp(left=Lit(1), op="+", right=Lit(2)),
+            op="+",
+            right=BinOp(left=Lit(3), op="+", right=Lit(4)),
+        ),
+        op="+",
+        right=BinOp(
+            left=BinOp(left=Lit(5), op="+", right=Lit(6)),
+            op="+",
+            right=BinOp(left=Lit(7), op="+", right=Lit(8)),
+        ),
+    )
+
+    rule = (
+        "WITH "
+        "lit as (Lit @val -> +vals),"
+        'rec as <(BinOp @left=#rec @op="\\+" @right=#rec) | #lit>'
+        "#rec"
+    )
+
+    matcher = BaseMatcher.from_pattern(rule)
+    ok, match_dict = matcher.match(node)
+    assert ok
+    assert match_dict["vals"] == (1, 2, 3, 4, 5, 6, 7, 8)
