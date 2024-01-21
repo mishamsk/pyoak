@@ -17,17 +17,30 @@ index_spec: "[" DIGIT* "]"
 
 class_spec: CNAME | tree
 
-pattern_alt: tree ("|" tree)*
+with_pattern: ("WITH" pattern_alias_def ("," pattern_alias_def)*)? pattern_alt
 
-tree: "(" pattern_class_spec pattern_field_spec* ")"
+pattern_alias_def: CNAME "AS" pattern_alt
+
+pattern_alt: "<" tree_or_ref ("|" tree_or_ref)* ">" | tree_or_ref ("|" tree_or_ref)*
+
+tree_or_ref: tree | pattern_ref
+
+pattern_ref: "#" CNAME
+
+tree: "(" pattern_class_spec? pattern_field_spec* ")" capture?
 
 pattern_class_spec: ANY | CLASS ("|" CLASS)*
 
-pattern_field_spec: "@" FIELD_NAME ("=" (sequence | value))? capture?
+pattern_field_spec: "@" FIELD_NAME ("=" value)? capture?
 
-sequence: "[" (value capture? ","?)* (ANY capture?)? "]"
+sequence:
+    "[]"
+    | "[" ANY capture? "]"
+    | "[" value wildcard? capture? ("," value wildcard? capture?)* (","  ANY capture?)? "]"
 
-value: pattern_alt | var | NONE | ESCAPED_STRING
+value: sequence | pattern_alt_or_ref | var | NONE | ESCAPED_STRING
+
+wildcard: "?" | "*" | "+" | "{" DIGIT+ ("," DIGIT+)? "}"
 
 capture: "->" "+"? CNAME
 
@@ -79,6 +92,8 @@ from .pattern import (
     AnyMatcher,
     BaseMatcher,
     NodeMatcher,
+    PatternRefMatcher,
+    QualifierMatcher,
     RegexMatcher,
     SequenceMatcher,
     ValueMatcher,
@@ -287,8 +302,35 @@ class LookaheadQueue(Generic[_IT]):
 
         return cast(_IT, self.consume())
 
+    def match_any(self, values: Sequence[Any]) -> _IT:
+        """Consume the next item in the queue if it matches any of the given values. Or raise a
+        NoMatchError.
+
+        Args:
+            values (Sequence[Any]): the values to match
+
+        Returns:
+            _IT: the item or None if there is no item
+
+        Raises:
+            NoMatchError: if the next item does not match any of the given values
+
+        """
+        item = self.peek()
+        if item not in values:
+            raise NoMatchError(values, item)
+
+        return cast(_IT, self.consume())
+
 
 class TokenType(Enum):
+    """Token types and their regular expressions.
+
+    Lexer uses case sensitive matching by defulat, so case insensitive tokens
+    need to be marked with `(?i:...)` or use lower & upper case groups in the regular expression.
+
+    """
+
     def __new__(cls, re_str: str) -> "TokenType":
         value = len(cls.__members__) + 1
 
@@ -308,12 +350,14 @@ class TokenType(Enum):
 
     _EOF = r"$"
     WS = r"\s+"
+    NONE = r"None\b"
+    WITH = r"(?i:with)\b"
+    AS = r"(?i:as)\b"
     CNAME = r"[_a-zA-Z][_a-zA-Z0-9]*"
     ESCAPED_STRING = r'"(?:[^"\\]|\\.)*"'
     DIGITS = r"[0-9]+"
     CAPTURE_START = r"->"
     CAPTURE_KEY = CNAME
-    NONE = CNAME
     STAR = r"\*"
     LPAREN = r"\("
     RPAREN = r"\)"
@@ -326,6 +370,12 @@ class TokenType(Enum):
     EQUALS = r"="
     PIPE = r"\|"
     PLUS = r"\+"
+    LT = r"<"
+    GT = r">"
+    QMARK = r"\?"
+    LCURLY = r"{"
+    RCURLY = r"}"
+    HASH = r"#"
 
 
 def _pretty_print_tok_type(tok_type: TokenType) -> str:
@@ -335,6 +385,12 @@ def _pretty_print_tok_type(tok_type: TokenType) -> str:
             return "end of text"
         case TokenType.WS:
             return "whitespace"
+        case TokenType.WITH:
+            return "'WITH'"
+        case TokenType.AS:
+            return "'AS'"
+        case TokenType.NONE:
+            return "'None'"
         case TokenType.CNAME:
             return "a name (identifier)"
         case TokenType.ESCAPED_STRING:
@@ -343,14 +399,12 @@ def _pretty_print_tok_type(tok_type: TokenType) -> str:
             return "a number"
         case TokenType.CAPTURE_START:
             return "-> (capture indicator)"
-        # This & None will never be hit, due to python enum aliases
+        # This will never be hit, due to python enum aliases
         # being the same object as the original enum member
         case TokenType.CAPTURE_KEY:
             return "a capture name"
-        case TokenType.NONE:
-            return "'None'"
         case TokenType.STAR:
-            return "'*' (any class / sequence tail marker)"
+            return "'*' (any class / sequence tail marker / wildcard)"
         case TokenType.LPAREN:
             return "'(' (pattern start)"
         case TokenType.RPAREN:
@@ -372,27 +426,45 @@ def _pretty_print_tok_type(tok_type: TokenType) -> str:
         case TokenType.PIPE:
             return "'|' (alternative separator)"
         case TokenType.PLUS:
-            return "'+' (multi capture indicator)"
+            return "'+' (multi capture indicator / wildcard)"
+        case TokenType.LT:
+            return "'<' (alternative boundary start)"
+        case TokenType.GT:
+            return "'>' (alternative boundary end)"
+        case TokenType.QMARK:
+            return "'?' (wildcard)"
+        case TokenType.LCURLY:
+            return "'{' (wildcard range start)"
+        case TokenType.RCURLY:
+            return "'}' (wildcard range end)"
+        case TokenType.HASH:
+            return "'#' (pattern ref start)"
         case _ as unreachable:
             _assert_never(unreachable)
 
 
 def _get_lexer_re(
     *,
-    include_tok_types: set[TokenType] | None = None,
+    include_tok_types: Sequence[TokenType] | None = None,
     exclude_tok_types: set[TokenType] | None = None,
 ) -> re.Pattern[str]:
     """Get the regular expression for the lexer.
 
     Args:
-        exclude_tok_types (Iterable[TokenType]): the token types to exclude
+        include_tok_types (Sequence[TokenType], optional): token types to include in order.
+            Order is important, as the first match wins.
+            Defaults to None, meaning all token types.
+        exclude_tok_types (Sequence[TokenType], optional): token types to exclude.
+            Defaults to None, meaning no token types are excluded.
 
     Returns:
         re.Pattern[str]: the regular expression
 
     """
-    if include_tok_types is None:
-        include_tok_types = set(TokenType)
+    tok_init_set = include_tok_types or list(TokenType.__members__.values())
+
+    # Dedup using a dict, to preserve order
+    toks_to_include = dict.fromkeys(tok_init_set)
 
     if exclude_tok_types is None:
         exclude_tok_types = set()
@@ -400,7 +472,8 @@ def _get_lexer_re(
     # Always exclude EOF, it is not for matching really, but for error reporting
     exclude_tok_types.add(TokenType._EOF)
 
-    toks_to_include = include_tok_types - exclude_tok_types
+    for tok in exclude_tok_types:
+        toks_to_include.pop(tok, None)
 
     re_str = "|".join(
         f"(?P<{token.name}>{token.re_str})" for token in TokenType if token in toks_to_include
@@ -409,13 +482,22 @@ def _get_lexer_re(
     return re.compile(re_str)
 
 
-_SEQ_OR_VALUE_FOLLOW_SET = (
+# Tokens that can start a value
+_VALUE_START_SET = (
+    TokenType.LBRACKET,  # sequence start
+    TokenType.LPAREN,  # tree/alternative start
+    TokenType.LT,  # tree/alternative start
+    TokenType.HASH,  # pattern ref start
+    TokenType.DOLLAR,  # variable indicator
+    TokenType.NONE,  # None
+    TokenType.ESCAPED_STRING,  # escaped string
+)
+
+# Tokens that can follow a value in a sequence
+_SEQ_VALUE_FOLLOW_SET = (
     TokenType.RBRACKET,
-    TokenType.LPAREN,
-    TokenType.DOLLAR,
-    TokenType.NONE,
-    TokenType.ESCAPED_STRING,
     TokenType.STAR,
+    *_VALUE_START_SET,
 )
 
 
@@ -494,14 +576,27 @@ class UnexpectedCharactersError(Exception):
     def __str__(self) -> str:
         msg = f"No matching token found at line {self.cur_line}, column {self.cur_column}\n\n"
 
+        err_point_index = self.text_pos
+        err_point_length = 1
+
+        # The index to point to is relative to the start of the text context
+        # so we need to subtract the start of the text context
+        err_point_index = max(0, err_point_index - max(0, self.text_pos - 40))
+
+        text_ctx_with_ptr = point_at_index(
+            self.text[max(0, self.text_pos - 40) : self.text_pos + 40],
+            err_point_index,
+            err_point_length,
+        )
+
+        msg += f"Text content:\n{text_ctx_with_ptr}\n\n"
+
         prev_tokens = self.previous_tokens[-5:]
 
         if prev_tokens:
             msg += "Previous tokens:\n"
             msg += "\n".join(f"{token!r}" for token in prev_tokens)
             msg += "\n\n"
-
-        msg += f"Text content:\n{self.text[self.text_pos-20:self.text_pos+20]}\n"
 
         return msg
 
@@ -638,11 +733,33 @@ class Parser:
         self._reset("")
 
     def _reset(self, text: str) -> None:
+        if not isinstance(text, str):
+            raise ASTXpathOrPatternDefinitionError(
+                f"Expected pattern to be a string, got {type(text).__name__!r}"
+            )
+
         self._lexer = Lexer(text)
         self._captures_seen: dict[str, bool] = {}
         """Stores the capture keys seen so far.
 
         Value is whether the capture is multi or not.
+
+        """
+
+        # We do not use clear, because the dict must survive parsing
+        self.pattern_alias_map: dict[str, AlternativeMatcher | NodeMatcher] = {}
+        """Stores the pattern aliases mapping to their matcher objects during parsing.
+
+        This is used both as a cache to replace references inlined in the pattern, as well as alias
+        map stored in PatternRefMatcher which remain when alias is recursively referenced.
+
+        """
+
+        self.pattern_refs_used: set[str] = set()
+        """Stores the pattern aliases used by generated PatternRefMatcher.
+
+        Used to remove the aliases that are not used in the pattern and check that all refs are
+        valid.
 
         """
 
@@ -685,6 +802,16 @@ class Parser:
             )
 
         if expected:
+            # CNAME from the user perspective already includes with, as, None
+            # but the lexer will return them as separate tokens in expected list
+            # remove them from the expected list if CNAMES are expected
+            if TokenType.CNAME in expected:
+                expected = [
+                    tok
+                    for tok in expected
+                    if tok not in (TokenType.WITH, TokenType.AS, TokenType.NONE)
+                ]
+
             expected_str = ", ".join(_pretty_print_tok_type(tok_type) for tok_type in expected)
 
             one_of = ""
@@ -710,12 +837,15 @@ class Parser:
         return ASTXpathOrPatternDefinitionError(msg)
 
     def _match_or_raise(
-        self, token_type: TokenType, msg: str, extra_expected: Sequence[TokenType] | None = None
+        self,
+        token_type: TokenType | Sequence[TokenType],
+        msg: str,
+        extra_expected: Sequence[TokenType] | None = None,
     ) -> Token:
         """Match the next token or raise an error.
 
         Args:
-            token_type (TokenType): the token type to match
+            token_type (TokenType | Sequence[TokenType]): the token type(s) to match
             msg (str): the error message to use if the match fails
             extra_expected (Sequence[TokenType], optional): extra token types to include in the
                 error message as expected. Defaults to None.
@@ -727,10 +857,16 @@ class Parser:
             Token: the matched token
 
         """
+        expected = []
         try:
-            token = self._lexer.match(token_type)
+            if isinstance(token_type, TokenType):
+                expected.append(token_type)
+                token = self._lexer.match(token_type)
+            else:
+                expected.extend(token_type)
+                token = self._lexer.match_any(token_type)
         except NoMatchError as e:
-            expected = [token_type, *extra_expected] if extra_expected else [token_type]
+            expected.extend(extra_expected or [])
 
             raise self._get_grammar_error_exception(
                 msg, expected, e.actual or TokenType._EOF
@@ -845,7 +981,10 @@ class Parser:
                 case TokenType.LBRACKET:
                     parent_index = self._index_spec()
                     continue
-                case TokenType.CNAME:
+                case TokenType.CNAME | TokenType.NONE | TokenType.WITH | TokenType.AS:
+                    # reserved keywords may be used as class names
+                    # although None can't really be used as a class name
+                    # but for simplicty with other places we just include it here
                     type_or_pattern = self._class_spec()
                     continue
                 case TokenType.LPAREN:
@@ -860,7 +999,8 @@ class Parser:
         """field_spec: "@" CNAME"""
         self._match_or_raise(TokenType.AT, "Incorrect field specification in xpath.")
         return self._match_or_raise(
-            TokenType.CNAME, "Incorrect field specification in xpath."
+            (TokenType.CNAME, TokenType.NONE, TokenType.WITH, TokenType.AS),
+            "Incorrect field specification in xpath.",
         ).value
 
     def _index_spec(self) -> int | None:
@@ -888,7 +1028,8 @@ class Parser:
     def _class_spec(self) -> type[ASTNode] | NodeMatcher:
         """class_spec: CNAME | tree"""
         class_name = self._match_or_raise(
-            TokenType.CNAME, "Incorrect definition of class name in xpath."
+            (TokenType.CNAME, TokenType.NONE, TokenType.WITH, TokenType.AS),
+            "Incorrect definition of class name in xpath.",
         ).value
 
         type_, msg = check_and_get_ast_node_type(class_name, self._types)
@@ -898,12 +1039,23 @@ class Parser:
 
         return type_
 
-    def _pattern_alt(self) -> AlternativeMatcher | NodeMatcher:
-        """pattern_alt: tree ("|" tree)*"""
-        matchers: list[NodeMatcher] = []
+    def _pattern_alt(self) -> AlternativeMatcher | NodeMatcher | PatternRefMatcher:
+        """pattern_alt: "<" tree_or_ref ("|" tree_or_ref)* ">" | tree_or_ref ("|" tree_or_ref)*"""
+        matchers: list[NodeMatcher | PatternRefMatcher] = []
+
+        has_bound = False
+        if self._lexer.peek() == TokenType.LT:
+            has_bound = True
+            self._lexer.consume()
 
         while not self._lexer.hit_eoq:
-            matchers.append(self._tree())
+            matcher = self._tree_or_ref()
+
+            if isinstance(matcher, AlternativeMatcher):
+                # Flatten the alternative
+                matchers.extend(matcher.matchers)
+            else:
+                matchers.append(matcher)
 
             if self._lexer.peek() != TokenType.PIPE:
                 break
@@ -916,13 +1068,16 @@ class Parser:
                 "Empty pattern definition. Make sure to include at least one tree pattern."
             )
 
+        if has_bound:
+            self._match_or_raise(TokenType.GT, "Incorrect pattern definition.")
+
         if len(matchers) == 1:
             return matchers[0]
 
         return AlternativeMatcher(matchers=tuple(matchers))
 
     def _tree(self) -> NodeMatcher:
-        """tree: "(" class_spec field_spec* ")" """
+        """tree: "(" pattern_class_spec pattern_field_spec* ")" capture?"""
         err_msg = "Incorrect definition of a tree pattern."
         self._match_or_raise(TokenType.LPAREN, err_msg)
 
@@ -944,6 +1099,15 @@ class Parser:
 
         self._match_or_raise(TokenType.RPAREN, err_msg, [TokenType.AT])
 
+        if (res := self._maybe_parse_capture_key()) is not None:
+            capture_key, multi_capture = res
+            return NodeMatcher(
+                types=tuple(match_types),
+                content=tuple(content),
+                name=capture_key,
+                append_to_match=multi_capture,
+            )
+
         return NodeMatcher(types=tuple(match_types), content=tuple(content))
 
     def _pattern_class_spec(self) -> list[type[ASTNode]]:
@@ -955,37 +1119,31 @@ class Parser:
         # First check if this is ANY
         if self._lexer.peek() == TokenType.STAR:
             self._lexer.consume()
-            return [ASTNode]
+            return []
 
-        # Ok, now we may only have class names
-        # And we must have at least one
-        expect_class_name = True
+        # Ok, now we may only have class names or attr, tree end
+        if self._lexer.peek() in (TokenType.CNAME, TokenType.NONE, TokenType.WITH, TokenType.AS):
+            class_names.append(
+                # we could have used just consume, but type checker will complain
+                self._match_or_raise(
+                    (TokenType.CNAME, TokenType.NONE, TokenType.WITH, TokenType.AS),
+                    "Incorrect definition of class name in a tree pattern.",
+                ).value
+            )
 
-        while not self._lexer.hit_eoq:
-            if expect_class_name:
+            while not self._lexer.hit_eoq:
+                match self._lexer.peek():
+                    case TokenType.PIPE:
+                        self._lexer.consume()
+                    case _:
+                        break
+
                 class_names.append(
                     self._match_or_raise(
-                        TokenType.CNAME, "Incorrect definition of class name in a tree pattern."
+                        (TokenType.CNAME, TokenType.NONE, TokenType.WITH, TokenType.AS),
+                        "Incorrect definition of class name in a tree pattern.",
                     ).value
                 )
-
-                expect_class_name = False
-                continue
-
-            match self._lexer.peek():
-                case TokenType.PIPE:
-                    self._lexer.consume()
-                    expect_class_name = True
-                    continue
-                case _:
-                    break
-
-        if not class_names:
-            raise self._get_grammar_error_exception(
-                "Incorrect definition of class name in a tree pattern. ",
-                [TokenType.CNAME, TokenType.STAR],
-                None,
-            )
 
         for class_name in class_names:
             type_, msg = check_and_get_ast_node_type(class_name, self._types)
@@ -1002,7 +1160,8 @@ class Parser:
         self._match_or_raise(TokenType.AT, "Incorrect definition of field name in a tree pattern.")
 
         field_name = self._match_or_raise(
-            TokenType.CNAME, "Incorrect definition of field name in a tree pattern."
+            (TokenType.CNAME, TokenType.NONE, TokenType.WITH, TokenType.AS),
+            "Incorrect definition of field name in a tree pattern.",
         ).value
 
         matcher: BaseMatcher = AnyMatcher()
@@ -1013,7 +1172,7 @@ class Parser:
         match self._lexer.peek():
             case TokenType.EQUALS:
                 self._lexer.consume()
-                matcher = self._sequence_or_value()
+                matcher = self._value()
                 has_value = True
             case TokenType.CAPTURE_START:
                 self._lexer.consume()
@@ -1023,14 +1182,8 @@ class Parser:
                 pass
 
         # Now try matching again, as we may have a capture key after a value
-        if has_value:
-            match self._lexer.peek():
-                case TokenType.CAPTURE_START:
-                    self._lexer.consume()
-                    capture_key, multi_capture = self._parse_capture_key()
-                case _:
-                    # Nothing, just a field name
-                    pass
+        if has_value and (res := self._maybe_parse_capture_key()) is not None:
+            capture_key, multi_capture = res
 
         if capture_key is not None:
             self._check_and_save_capture_key(capture_key, multi_capture)
@@ -1054,7 +1207,7 @@ class Parser:
 
         try:
             capture_key = self._match_or_raise(
-                TokenType.CAPTURE_KEY,
+                (TokenType.CAPTURE_KEY, TokenType.NONE, TokenType.WITH, TokenType.AS),
                 "Incorrect definition of capture key in a tree pattern.",
             ).value
         except UnexpectedCharactersError as e:
@@ -1063,6 +1216,72 @@ class Parser:
             ) from None
 
         return capture_key, multi_capture
+
+    def _maybe_parse_capture_key(self) -> tuple[str, bool] | None:
+        """Check if capture key indicator follows and then parse the capture key.
+
+        Returns:
+            tuple[str, bool] | None: the capture key and the multi capture indicator
+                or None if no capture key indicator follows
+
+        """
+        if self._lexer.peek() == TokenType.CAPTURE_START:
+            self._lexer.consume()
+            capture_key, multi_capture = self._parse_capture_key()
+
+            self._check_and_save_capture_key(capture_key, multi_capture)
+
+            return capture_key, multi_capture
+
+        return None
+
+    def _maybe_parse_wildcard(self) -> tuple[int, int | None] | None:
+        """Check if wildcard follows and then parse the wildcard.
+
+        Returns:
+            tuple[int, int] | None: the wildcard min and max values
+                or None if no wildcard follows
+
+        """
+        match self._lexer.peek():
+            case TokenType.QMARK:
+                self._lexer.consume()
+                return 0, 1
+            case TokenType.STAR:
+                self._lexer.consume()
+                return 0, None
+            case TokenType.PLUS:
+                self._lexer.consume()
+                return 1, None
+            case TokenType.LCURLY:
+                self._lexer.consume()
+                min_ = int(
+                    self._match_or_raise(
+                        TokenType.DIGITS,
+                        "Incorrect definition of wildcard range in a tree pattern.",
+                    ).value
+                )
+
+                max_ = min_
+
+                if self._lexer.peek() == TokenType.COMMA:
+                    self._lexer.consume()
+
+                    if self._lexer.peek() != TokenType.RCURLY:
+                        max_ = int(
+                            self._match_or_raise(
+                                TokenType.DIGITS,
+                                "Incorrect definition of wildcard range in a tree pattern.",
+                            ).value
+                        )
+
+                self._match_or_raise(
+                    TokenType.RCURLY, "Incorrect definition of wildcard range in a tree pattern."
+                )
+
+                return min_, max_
+            case _:
+                return None
 
     def _parse_variable_ref(self) -> str:
         """Parse a name (capture key) used as a variable.
@@ -1075,7 +1294,7 @@ class Parser:
         self._match_or_raise(TokenType.DOLLAR, "Incorrect variable reference in a tree pattern.")
 
         var_name = self._match_or_raise(
-            TokenType.CAPTURE_KEY,
+            (TokenType.CAPTURE_KEY, TokenType.NONE, TokenType.WITH, TokenType.AS),
             "Incorrect definition of capture key in a tree pattern.",
         ).value
 
@@ -1088,8 +1307,8 @@ class Parser:
 
         return var_name
 
-    def _sequence_or_value(self) -> BaseMatcher:
-        """(sequence | value)"""
+    def _value(self) -> BaseMatcher:
+        """value: sequence | pattern_alt | var | NONE | ESCAPED_STRING"""
 
         try:
             next_tok = self._lexer.peek()
@@ -1101,12 +1320,12 @@ class Parser:
         match next_tok:
             case TokenType.LBRACKET:
                 return self._sequence()
-            case TokenType.LPAREN:
+            case TokenType.LPAREN | TokenType.LT | TokenType.HASH:
                 return self._pattern_alt()
-            case TokenType.DOLLAR | TokenType.CNAME | TokenType.ESCAPED_STRING:
-                # TokenType.CNAME here is in place of NONE
-                return self._value()
+            case TokenType.DOLLAR | TokenType.NONE | TokenType.ESCAPED_STRING:
+                return self._simple_value()
             case TokenType.STAR:
+                # Just for a nicer error message
                 raise self._get_grammar_error_exception(
                     "Incorrect definition of field value in a tree pattern. "
                     "Sequence tail marker '*' must be inside [].",
@@ -1116,85 +1335,76 @@ class Parser:
             case _ as tok:
                 raise self._get_grammar_error_exception(
                     "Incorrect definition of field value in a tree pattern. ",
-                    [
-                        TokenType.LBRACKET,
-                        TokenType.LPAREN,
-                        TokenType.DOLLAR,
-                        TokenType.NONE,
-                        TokenType.ESCAPED_STRING,
-                    ],
-                    tok.type if tok else None,
+                    _VALUE_START_SET,
+                    tok,
                 )
 
     def _sequence(self) -> SequenceMatcher | ValueMatcher:
-        """sequence: "[" (value capture? ","?)* (ANY capture?)? "]" """
+        """sequence:
+        "[]"
+        | "[" ANY capture? "]"
+        | "[" value wildcard? capture? ("," value wildcard? capture?)* (","  ANY capture?)? "]"
+        """
 
         err_msg = "Incorrect definition of sequence in a tree pattern."
         self._match_or_raise(TokenType.LBRACKET, err_msg)
 
         matchers: list[BaseMatcher] = []
         hit_any: bool = False
-        expect_comma: bool = False
 
         next_tok = self._lexer.peek()
 
         while next_tok and next_tok != TokenType.RBRACKET:
             match next_tok:
-                case TokenType.LPAREN:
-                    matchers.append(self._pattern_alt())
-                    expect_comma = True
-                case TokenType.DOLLAR | TokenType.CNAME | TokenType.ESCAPED_STRING:
+                case (
+                    TokenType.LBRACKET  # sequence start
+                    | TokenType.LPAREN  # tree/alternative start
+                    | TokenType.LT  # tree/alternative start
+                    | TokenType.HASH  # pattern ref start
+                    | TokenType.DOLLAR  # variable indicator
+                    | TokenType.NONE  # None
+                    | TokenType.ESCAPED_STRING  # escaped string
+                ):
                     matchers.append(self._value())
-                    expect_comma = True
-                case TokenType.COMMA:
-                    if not expect_comma:
-                        raise self._get_grammar_error_exception(
-                            err_msg,
-                            _SEQ_OR_VALUE_FOLLOW_SET,
-                            TokenType.COMMA,
-                        )
-
-                    self._lexer.consume()
-                    expect_comma = False
-
-                    # We can't have capture after a comma
-                    # So we skip the logic after this match
-                    next_tok = self._lexer.peek()
-                    continue
                 case TokenType.STAR:
-                    # There could only be one
-                    if hit_any:
-                        raise self._get_grammar_error_exception(
-                            f"{err_msg}. Multiple '*' sequence tail specifiers.",
-                            [TokenType.RBRACKET],
-                            TokenType.STAR,
-                        )
-
                     self._lexer.consume()
                     matchers.append(AnyMatcher())
-                    expect_comma = False
+                    hit_any = True
                 case _ as tok:
                     raise self._get_grammar_error_exception(
                         err_msg,
-                        _SEQ_OR_VALUE_FOLLOW_SET,
+                        _SEQ_VALUE_FOLLOW_SET,
                         tok,
                     )
 
-            next_tok = self._lexer.peek()
+            if (wldcard_res := self._maybe_parse_wildcard()) is not None:
+                min_, max_ = wldcard_res
 
-            if next_tok == TokenType.CAPTURE_START:
-                self._lexer.consume()
-                capture_key, multi_capture = self._parse_capture_key()
+                matchers[-1] = QualifierMatcher(matchers[-1], min_, max_)
 
-                self._check_and_save_capture_key(capture_key, multi_capture)
+            if (cap_res := self._maybe_parse_capture_key()) is not None:
+                capture_key, multi_capture = cap_res
 
                 matchers[-1] = replace(
                     matchers[-1], name=capture_key, append_to_match=multi_capture
                 )
-                next_tok = self._lexer.peek()
+
+            if hit_any:
+                # If we hit ANY, we can't have anything else
+                break
+
+            if self._lexer.peek() != TokenType.COMMA:
+                # No comma, means no more values
+                break
+
+            # Consume the comma
+            self._lexer.consume()
+            next_tok = self._lexer.peek()
 
         self._match_or_raise(
-            TokenType.RBRACKET, "Incorrect definition of sequence in a tree pattern."
+            TokenType.RBRACKET,
+            err_msg,
+            [TokenType.COMMA] if not hit_any else None,
         )
 
         if len(matchers) == 0:
@@ -1202,36 +1412,131 @@ class Parser:
 
         return SequenceMatcher(matchers=tuple(matchers))
 
-    def _value(self) -> ValueMatcher | RegexMatcher | VarMatcher:
-        """value: tree | var | NONE | ESCAPED_STRING
-
-        But tree is already handled by _sequence_or_value
+    def _simple_value(self) -> ValueMatcher | RegexMatcher | VarMatcher:
+        """Part of the value rule (sans sequence & pattern_alt)
+        value: sequence | pattern_alt | var | NONE | ESCAPED_STRING
         """
         match self._lexer.peek():
             case TokenType.DOLLAR:
                 var_name = self._parse_variable_ref()
 
                 return VarMatcher(var_name=var_name)
-            case TokenType.CNAME as tok:
-                if tok.value == "None":
-                    self._lexer.consume()
-                    return ValueMatcher(value=None)
-
-                # Error
-                raise self._get_grammar_error_exception(
-                    "Incorrect definition of field value in a tree pattern.",
-                    [TokenType.NONE],
-                    tok.type,
-                )
+            case TokenType.NONE:
+                tok = self._lexer.consume()
+                return ValueMatcher(value=None)
             case TokenType.ESCAPED_STRING:
                 tok = self._lexer.consume()
-                return RegexMatcher(_re_str=tok.value)
+                try:
+                    return RegexMatcher(_re_str=tok.value)
+                except re.error as e:
+                    raise self._get_grammar_error_exception(
+                        f"Incorrect definition of field value in a tree pattern. "
+                        f"Invalid regex string <{tok.value!r}>: {e!s}",
+                        [],
+                        tok,
+                    ) from None
             case _ as tok:
                 raise self._get_grammar_error_exception(
                     "Incorrect definition of field value in a tree pattern.",
                     [TokenType.DOLLAR, TokenType.NONE, TokenType.ESCAPED_STRING],
                     tok,
                 )
+
+    def _pattern_alias_def(self) -> None:
+        """pattern_alias_def: CNAME "AS" pattern_alt"""
+        pattern_name = self._match_or_raise(
+            (TokenType.CNAME, TokenType.NONE, TokenType.WITH, TokenType.AS),
+            "Incorrect pattern alias definition.",
+        ).value
+
+        if pattern_name in self.pattern_alias_map:
+            raise ASTXpathOrPatternDefinitionError(
+                f"Pattern alias <{pattern_name}> is already defined"
+            )
+
+        self._match_or_raise(TokenType.AS, "Incorrect pattern alias definition.")
+
+        matcher = self._pattern_alt()
+
+        if isinstance(matcher, PatternRefMatcher):
+            # This means an alias to an alias, silly, don't allow it
+            raise ASTXpathOrPatternDefinitionError(
+                f"Pattern alias <{pattern_name}> is an alias to another alias <{matcher.pattern_name}>. "
+                f"This is not allowed, just use the <{matcher.pattern_name}>."
+            )
+
+        self.pattern_alias_map[pattern_name] = matcher
+
+    def _pattern_ref(self) -> AlternativeMatcher | NodeMatcher | PatternRefMatcher:
+        """pattern_ref: "#" CNAME"""
+        self._match_or_raise(TokenType.HASH, "Incorrect pattern reference definition.")
+
+        pattern_name = self._match_or_raise(
+            (TokenType.CNAME, TokenType.NONE, TokenType.WITH, TokenType.AS),
+            "Incorrect pattern reference definition.",
+        ).value
+
+        if pattern_name not in self.pattern_alias_map:
+            # This is a pattern ref, but the pattern is not defined yet
+            # which means either a recursive reference or a reference to a pattern
+            # defined later. In this case we create a genuine PatternRefMatcher
+
+            # We use the shared mutable mapping of pattern aliases
+            # this way it will eventually be populated with the referenced pattern
+            # by the time of matching
+            pattern_ref = PatternRefMatcher(pattern_name, self.pattern_alias_map)
+
+            # Add it to the set of refs used, so that we can remove unused aliases
+            # and check that this reference was eventually defined
+            self.pattern_refs_used.add(pattern_name)
+
+            return pattern_ref
+
+        # If the referenced pattern is already defined, we can "inline" it
+        # no need to create a PatternRefMatcher
+        return self.pattern_alias_map[pattern_name]
+
+    def _tree_or_ref(self) -> AlternativeMatcher | NodeMatcher | PatternRefMatcher:
+        """tree_or_ref: tree | pattern_ref"""
+        if self._lexer.peek() == TokenType.HASH:
+            return self._pattern_ref()
+
+        return self._tree()
+
+    def _with_pattern(self) -> AlternativeMatcher | NodeMatcher:
+        """with_pattern: ("WITH" pattern_alias_def ("," pattern_alias_def)*)? pattern_alt"""
+
+        if self._lexer.peek() == TokenType.WITH:
+            self._lexer.consume()
+
+            # Pattern aliases do not return anything, they just populate the pattern_alias_map
+            self._pattern_alias_def()
+
+            while self._lexer.peek() == TokenType.COMMA:
+                self._lexer.consume()
+                self._pattern_alias_def()
+
+        ret = self._pattern_alt()
+
+        # Check that all pattern refs are valid
+        if self.pattern_refs_used - set(self.pattern_alias_map):
+            raise ASTXpathOrPatternDefinitionError(
+                f"Pattern alias(es) <{', '.join(sorted(self.pattern_refs_used))}> are referenced but not defined"
+            )
+
+        # Remove all patterns aliases that were inlined in the pattern
+        # and are not used by any other pattern
+        for alias in list(self.pattern_alias_map.keys()):
+            if alias not in self.pattern_refs_used:
+                self.pattern_alias_map.pop(alias)
+
+        if isinstance(ret, PatternRefMatcher):
+            # This should not happen, must be a bug
+            raise ASTXpathOrPatternDefinitionError(
+                "Internal error: pattern ref returned instead of a pattern. Please report it!"
+            )
+
+        return ret
 
     def parse_xpath(self, xpath: str) -> Sequence[ASTXpathElement]:
         """Public API to parse an xpath.
@@ -1280,7 +1585,7 @@ class Parser:
         self._reset(pattern)
 
         try:
-            ret = self._pattern_alt()
+            ret = self._with_pattern()
 
             # This is the top-level alternative, so it must be the last thing in the pattern
             if not self._lexer.hit_eoq and (next_tok := self._lexer.peek()):

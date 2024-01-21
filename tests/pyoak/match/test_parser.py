@@ -29,7 +29,7 @@ class IntLAQueue(LookaheadQueue[int]):
         return self._len + 1
 
 
-def test_lookahead_queue_initialization():
+def test_lookahead_queue_initialization() -> None:
     queue = IntLAQueue([1, 2, 3], 0)
     assert queue.items == (1, 2, 3)
     assert queue.pos == 0
@@ -38,7 +38,7 @@ def test_lookahead_queue_initialization():
     assert not queue.feed()
 
 
-def test_lookahead_queue_feed():
+def test_lookahead_queue_feed() -> None:
     queue = IntLAQueue([1, 2, 3], 1)
 
     # Test will feed only 1 additional item
@@ -57,7 +57,7 @@ def test_lookahead_queue_feed():
     assert queue.len == 4
 
 
-def test_lookahead_queue_fill():
+def test_lookahead_queue_fill() -> None:
     queue = IntLAQueue([1, 2, 3], 5)
 
     # Test fill all items
@@ -104,7 +104,7 @@ def test_lookahead_queue_fill():
     assert not queue.feed()
 
 
-def test_lookahead_queue_peek_la():
+def test_lookahead_queue_peek_la() -> None:
     queue = IntLAQueue([1, 2, 3], 0)
 
     assert queue.peek() == queue.la() == 1
@@ -114,7 +114,7 @@ def test_lookahead_queue_peek_la():
     assert queue.peek(4) == queue.la(4) is None
 
 
-def test_lookahead_queue_lb():
+def test_lookahead_queue_lb() -> None:
     queue = IntLAQueue([1, 2, 3], 0)
 
     assert queue.lb() is None
@@ -130,7 +130,7 @@ def test_lookahead_queue_lb():
     assert queue.lb(4) is None
 
 
-def test_lookahead_queue_last():
+def test_lookahead_queue_last() -> None:
     queue = IntLAQueue([1, 2, 3], 0)
 
     assert queue.last() is None
@@ -140,7 +140,7 @@ def test_lookahead_queue_last():
         assert queue.last() == i + 1
 
 
-def test_lookahead_queue_consume():
+def test_lookahead_queue_consume() -> None:
     queue = IntLAQueue([1, 2, 3], 0)
     assert queue.consume() == 1
     assert queue.consume() == 2
@@ -148,7 +148,7 @@ def test_lookahead_queue_consume():
     assert queue.consume() is None
 
 
-def test_lookahead_queue_match():
+def test_lookahead_queue_match() -> None:
     queue = IntLAQueue([1, 2, 3], 0)
 
     assert queue.match(1) == 1
@@ -170,7 +170,29 @@ def test_lookahead_queue_match():
     assert exc_info.value.actual == 3
 
 
-def test_token_equality():
+def test_lookahead_queue_match_any() -> None:
+    queue = IntLAQueue([1, 2, 3], 0)
+
+    assert queue.match_any([1, 2, 3]) == 1
+
+    with pytest.raises(NoMatchError) as exc_info:
+        # 3 is not next item
+        queue.match_any([3])
+
+    assert exc_info.value.expected == [3]
+    assert exc_info.value.actual == 2
+
+    assert queue.match_any([2]) == 2
+
+    with pytest.raises(NoMatchError) as exc_info:
+        # try a different type
+        queue.match_any(["2"])
+
+    assert exc_info.value.expected == ["2"]
+    assert exc_info.value.actual == 3
+
+
+def test_token_equality() -> None:
     token1 = Token(TokenType.CNAME, "test", 0, 4, 1, 0, "test text")
     token2 = Token(TokenType.CNAME, "test", 2, 6, 1, 2, "test text")
     token3 = Token(TokenType.CNAME, "test", 0, 4, 1, 0, "test text")
@@ -183,7 +205,7 @@ def test_token_equality():
     assert token1 != "not a token"
 
 
-def test_init():
+def test_init() -> None:
     lexer = Lexer("test text")
     assert lexer._text == "test text"
     assert lexer._text_pos == 0
@@ -192,14 +214,14 @@ def test_init():
     assert lexer._mode_stack == [LexerMode.REGULAR]
 
 
-def test_mode():
+def test_mode() -> None:
     lexer = Lexer("test text")
     with lexer.mode(LexerMode.REGULAR):
         assert lexer._mode_stack == [LexerMode.REGULAR, LexerMode.REGULAR]
     assert lexer._mode_stack == [LexerMode.REGULAR]
 
 
-def test_advance_pos():
+def test_advance_pos() -> None:
     text = "test text"
     lexer = Lexer(text)
     token = Token(TokenType.CNAME, "test", 0, 4, 1, 0, text)
@@ -216,6 +238,9 @@ def test_advance_pos():
     assert lexer._text_pos == 8
     assert lexer._cur_line == 3
     assert lexer._cur_column == 1
+
+
+ALL_LEXEMS = '($None"test\\"test"[as,with,none,assuf,withsuf'
 
 
 @pytest.mark.parametrize(
@@ -254,20 +279,29 @@ def test_advance_pos():
             LexerMode.REGULAR,
         ),
         (
-            '($None"test\\"test"[',
+            '($None"test\\"test"[as,with,none,assuf,withsuf',
             [
-                Token(TokenType.LPAREN, "(", 0, 1, 1, 0, '($None"test\\"test"['),
-                Token(TokenType.DOLLAR, "$", 1, 2, 1, 1, '($None"test\\"test"['),
-                Token(TokenType.CNAME, "None", 2, 6, 1, 2, '($None"test\\"test"['),
-                Token(TokenType.ESCAPED_STRING, 'test\\"test', 6, 18, 1, 6, '($None"test\\"test"['),
-                Token(TokenType.LBRACKET, "[", 18, 19, 1, 18, '($None"test\\"test"['),
+                Token(TokenType.LPAREN, "(", 0, 1, 1, 0, ALL_LEXEMS),
+                Token(TokenType.DOLLAR, "$", 1, 2, 1, 1, ALL_LEXEMS),
+                Token(TokenType.NONE, "None", 2, 6, 1, 2, ALL_LEXEMS),
+                Token(TokenType.ESCAPED_STRING, 'test\\"test', 6, 18, 1, 6, ALL_LEXEMS),
+                Token(TokenType.LBRACKET, "[", 18, 19, 1, 18, ALL_LEXEMS),
+                Token(TokenType.AS, "as", 19, 21, 1, 19, ALL_LEXEMS),
+                Token(TokenType.COMMA, ",", 21, 22, 1, 21, ALL_LEXEMS),
+                Token(TokenType.WITH, "with", 22, 26, 1, 22, ALL_LEXEMS),
+                Token(TokenType.COMMA, ",", 26, 27, 1, 26, ALL_LEXEMS),
+                Token(TokenType.CNAME, "none", 27, 31, 1, 27, ALL_LEXEMS),
+                Token(TokenType.COMMA, ",", 31, 32, 1, 31, ALL_LEXEMS),
+                Token(TokenType.CNAME, "assuf", 32, 37, 1, 32, ALL_LEXEMS),
+                Token(TokenType.COMMA, ",", 37, 38, 1, 37, ALL_LEXEMS),
+                Token(TokenType.CNAME, "withsuf", 38, 45, 1, 38, ALL_LEXEMS),
             ],
             LexerMode.REGULAR,
         ),
         # TODO: more tests
     ],
 )
-def test_correct_lexing(text: str, expected: list[Token], mode: LexerMode):
+def test_correct_lexing(text: str, expected: list[Token], mode: LexerMode) -> None:
     lexer = Lexer(text)
 
     with lexer.mode(mode):
@@ -282,10 +316,10 @@ def test_correct_lexing(text: str, expected: list[Token], mode: LexerMode):
         assert all(tok._asdict() == exp_tok._asdict() for tok, exp_tok in zip(all_tokens, expected))
 
 
-def test_error_reporting():
+def test_error_reporting() -> None:
     @dataclass
     class TestType(ASTNode):
-        pass
+        attr: str
 
     parser = Parser({"TestType": TestType})
 
