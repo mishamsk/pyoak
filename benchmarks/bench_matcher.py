@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import math
 import time
+import timeit
 
+from pyoak.match.pattern import BaseMatcher
 from pyoak.match.xpath import ASTXpath
-from sample_tree import gen_sample_tree
+from sample_tree import Leaf, gen_sample_tree
 
 
 def run_benchmark():
@@ -36,6 +38,28 @@ def run_benchmark():
         matcher.match(leaf)
 
     print(f"Time to match {len(leafs)} items: {time.monotonic() - st}")
+
+    while not isinstance(left_most_leaf := next(tree.dfs(bottom_up=True)), Leaf):
+        pass
+
+    recursive_patterns = f"""
+    with leaf as (Leaf @attr4="{left_most_leaf.attr4}"),
+    inner as <(Inner @child=#inner) | #leaf>
+    #inner
+    """
+
+    print(
+        f"Searching for a node at {len(list(left_most_leaf.ancestors()))} depth using pattern:{recursive_patterns}"
+    )
+
+    st = time.monotonic()
+    matcher = BaseMatcher.from_pattern(recursive_patterns)
+    print(f"Time to build new matcher: {time.monotonic() - st}")
+
+    # Time the execution of the function 10000 times
+    mtime = timeit.timeit(lambda: matcher.match(tree), number=10000)
+
+    print(f"Time to match 10000 times: {mtime:.6f} seconds")
 
 
 if __name__ == "__main__":

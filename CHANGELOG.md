@@ -35,6 +35,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - TBD
 
+## [3.0.0a8]
+
+Highlight: pattern aliases with recursion and regex like wildcards!
+
+### 🚀 Added
+
+- Introduced pattern aliases with recursion
+- Added pattern wildcards (qualifiers)
+- Allowed empty class and thus simpler `()` (instead of `(*)`) for any node. Although the older syntax is still supported.
+- Added 'with', 'as' tokens and tests to pattern lexer (for with patterns)
+- Added optional boundaries for pattern alternatives
+- Allowed capturing at the outmost level in patterns
+- Added ability to capture multiple values under same name in a pattern
+
+### ✨ Changed
+
+- BREAKING: Disallowed non-existent field names in node patterns - raises an error now
+- BREAKING: Commas now enforced in sequence patterns
+- Show meaningful error if pattern definition is not a string
+- Showed meaningful error if string value pattern is not a valid regex
+- Improved error reporting for None value in pattern
+- Provided better context in lexer errors
+
+### 🐛 Fixed
+
+- Do not allow values after any wildcard in sequence patterns
+- Made sure the outer captured value stored, not inner
+
+### 📖 Documentation
+
+- Added full pattern syntax to README
+
+### 🛠️ Internal
+
+- Simplified sequence/value grammar
+- Unified capture key parsing logic
+- Updated match bench with recursive pattern test
+- Extended and improved pattern test structure
+- Made match dict tests more robust, compare entire dict
+- Multiple improvements to parser error messages
+
 ## [3.0.0a7]
 
 ### 🚀 Added
