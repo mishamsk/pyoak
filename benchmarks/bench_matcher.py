@@ -6,7 +6,7 @@ import timeit
 
 from pyoak.match.pattern import BaseMatcher
 from pyoak.match.xpath import ASTXpath
-from sample_tree import Leaf, gen_sample_tree
+from sample_tree import gen_sample_tree
 
 
 def run_benchmark():
@@ -15,7 +15,12 @@ def run_benchmark():
     max_nodes = math.floor(math.pow(TREE_MAX_SIZE, 1 / DEPTH))
 
     tree = gen_sample_tree(DEPTH, max_nodes)
-    total_nodes = len(list(tree.dfs()))
+
+    st = time.monotonic()
+    all_nodes = list(tree.bfs())
+    full_tree_traversal_time = time.monotonic() - st
+
+    total_nodes = len(all_nodes)
 
     xpath = '/(Inner @attr1="attr1_[0-9]+")//Leaf'
 
@@ -39,27 +44,33 @@ def run_benchmark():
 
     print(f"Time to match {len(leafs)} items: {time.monotonic() - st}")
 
-    while not isinstance(left_most_leaf := next(tree.dfs(bottom_up=True)), Leaf):
-        pass
+    right_bottom_most_leaf = all_nodes[-1]
 
     recursive_patterns = f"""
-    with leaf as (Leaf @attr4="{left_most_leaf.attr4}"),
-    inner as <(Inner @child=#inner) | #leaf>
+    with leaf as (Leaf @attr4="{right_bottom_most_leaf.attr4}") -> cap,
+    inner as <(Inner @child=#inner @child_tuple=[#inner*]) | #leaf | (Leaf)>
     #inner
     """
 
     print(
-        f"Searching for a node at {len(list(left_most_leaf.ancestors()))} depth using pattern:{recursive_patterns}"
+        "Searching for a right most node at the maximum tree depth of "
+        f"{len(list(right_bottom_most_leaf.ancestors()))} using pattern:{recursive_patterns}"
     )
 
     st = time.monotonic()
     matcher = BaseMatcher.from_pattern(recursive_patterns)
     print(f"Time to build new matcher: {time.monotonic() - st}")
 
-    # Time the execution of the function 10000 times
-    mtime = timeit.timeit(lambda: matcher.match(tree), number=10000)
+    ok, match_dict = matcher.match(tree)
+    assert ok
+    assert match_dict["cap"] is right_bottom_most_leaf
 
-    print(f"Time to match 10000 times: {mtime:.6f} seconds")
+    # Time the execution of the function 10 times
+    mtime = timeit.timeit(lambda: matcher.match(tree), number=10) / 10
+
+    print(f"Time to match (avg of 10 times): {mtime:.6f} seconds")
+    print(f"Comparing to full tree traversal (1 times): {full_tree_traversal_time:.6f} seconds")
+    print(f"Slowdown ratio: {mtime / full_tree_traversal_time:.2f}")
 
 
 if __name__ == "__main__":
