@@ -35,6 +35,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - TBD
 
+## [3.0.0a9]
+
+Highlight: visitor base class improvements
+
+### 🚀 Added
+
+- ⏱️ added visitor method benchmark
+
+### ✨ Changed
+
+- BREAKING: visitor now matches nodes to methods by type annotation, ignoring method name
+- visitor method matching is factored out allowing to create subclasses with visit method signatures having additional arguments
+- ⏱️ in matcher bench - do right most leaf search and compare to traversal
+
 ## [3.0.0a8]
 
 Highlight: pattern aliases with recursion and regex like wildcards!

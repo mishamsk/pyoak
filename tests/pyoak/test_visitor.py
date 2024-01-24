@@ -71,21 +71,37 @@ def test_visitor_validation() -> None:
         def visit_SomeNode(self, node: VisitorTestChildNode) -> None:
             pass
 
-    # Test validation passes with no type annotations
-    class SecondDummyVisitor(ASTVisitor[None], validate=True):
-        def visit_SomeNode(self, node) -> None:
-            pass
-
     with pytest.raises(TypeError) as err:
 
         class FailingDummyVisitor(ASTVisitor[None], validate=True):
+            def visit_NotEnoughArgs(self) -> None:
+                pass
+
+            def visit_NoAnnotation(self, node) -> None:
+                pass
+
+            def visit_NotASubclass(self, node: str) -> None:
+                pass
+
+            def visit_ComplexType(self, node: VisitorTestChildNode | VisitorTestParentNode) -> None:
+                pass
+
             def visit_SomeNode(self, node: VisitorTestChildNode) -> None:
                 pass
 
-            def visit_OtherNode(self, node: VisitorTestChildNode) -> None:
+            # This should be fine
+            def visit_VisitorTestChildNode(self, node: VisitorTestChildNode) -> None:
+                pass
+
+            def visitNotAVisitorMethod(self) -> None:
                 pass
 
     assert (
         err.value.args[0]
-        == "Visitor class 'FailingDummyVisitor' method(s) 'visit_OtherNode, visit_SomeNode' do not match node type annotation(s) 'VisitorTestChildNode, VisitorTestChildNode'"
+        == "Visitor class 'FailingDummyVisitor' method(s) have invalid signature(s):\n"
+        "  - 'visit_ComplexType': Node type annotation must be a single ASTNode subclass\n"
+        "  - 'visit_NoAnnotation': Node type annotation is missing\n"
+        "  - 'visit_NotASubclass': Node type annotation must be a subclass of ASTNode\n"
+        "  - 'visit_NotEnoughArgs': Method must have at least two parameters: self and node\n"
+        "  - 'visit_SomeNode': Method name doesn't match the second argument type annotation"
     )

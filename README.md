@@ -47,7 +47,6 @@ Commerial-grade, well tested, documented, strongly typed pure Python library wit
     - [Visitors \& Transformers](#visitors--transformers)
         - [ASTVisitor](#astvisitor)
         - [ASTTransformVisitor](#asttransformvisitor)
-        - [ASTTransformer](#asttransformer)
     - [Serialization \& Deserialization](#serialization--deserialization)
         - [Debugging \& Reporting Deserialization Errors for Deeply Nested Trees](#debugging--reporting-deserialization-errors-for-deeply-nested-trees)
 - [Credits](#credits)
@@ -507,7 +506,7 @@ Here is the full syntax:
 
 ### Visitors & Transformers
 
-pyoak provides 3 classes for visiting and transforming the tree.
+pyoak provides 2 base classes for visiting and transforming the tree.
 
 #### ASTVisitor
 A base class for all visitors, and the one to use if you want to visit the tree without changing it.
@@ -516,9 +515,10 @@ It provides a `visit` method that will call the appropriate `visit_<node_type>` 
 
 Important notes:
 * Visitor doesn't visit children by default. It is up to you to call `visit` on the children you want to visit.
+* Visitor methods are only those that start with `visit_` and the matching is done based on type annotation of the second argument. For more details - see the docstring for `ASTVisitor`
 * By default, visitor methods are matched by the type of the node, if not found the next type in the MRO is checked, and so on. Going back to our examples above `visit_Expr` will be triggered for any subclass of Expr, unless a more specific visitor is defined.
   * If you'd like visitor methods to be matched only by strict type equality, change the class variable `strict` to True in your visitor class.
-* You can pass `validate=True` when inheriting from `ASTVisitor` like so `class MyVisitor(ASTVisitor, validate=True)` to validate that all visitor methods match the call signature. I.e. if you have a visitor method `visit_Expr(self, node: IntExpr)` and `validate=True` is passed, an exception will be raised.
+* You can pass `validate=True` when inheriting from `ASTVisitor` like so `class MyVisitor(ASTVisitor, validate=True)` to validate that all visitor methods match the call signature. I.e. if you have a visitor method `visit_Expr(self, node: IntExpr)` and `validate=True` is passed, an exception will be raised. By default method names are ignored.
 
 #### ASTTransformVisitor
 
@@ -531,27 +531,6 @@ Instead of calling `visit`, you'd call the `transform` method (although `visit` 
 Unlike regular visitors, this one always works on a detached copy of the tree. This is necessary to ensure that the original tree is only modified and replaced on successful transformation.
 
 The major implication of this is that you can't traverse `up` the tree inside visitor methods, as the parent pointers are not set on the copy.
-
-#### ASTTransformer
-
-Strictly speaking, this is not a visitor, but just a thin wrapper that traverses the tree bottom up, depth-first (using the `ASTNode.dfs` method) and applying `ASTNode.replace_with` when necessary.
-
-Instead of passing functions to filters and writing replacement logic yourself, it allows you to inherit from `ASTTransformer`, redefine the `transform` method (and also optional `filter` and `prune` methods), and then run everything via the `execute` method.
-
-Unlike ASTTransformVisitor, this class works on the original tree, so you can traverse `up` the tree inside the `transform` method.
-
-```python
-class SomeTransformer(ASTTransformer):
-    def filter(self, node: ASTNode) -> bool:
-        return isinstance(node, TypeOfInterest)
-
-    def transform(self, node: ASTNode) -> ASTNode | None:
-        # In reality, based on the filter nodes will be of TypeOfInterest, but we can't specify that in the signature
-        if smth:
-            return None
-        else:
-            return node.replace(attr=new_value)
-```
 
 ### Serialization & Deserialization
 
