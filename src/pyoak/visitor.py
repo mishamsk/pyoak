@@ -1,7 +1,7 @@
+import weakref
 from abc import ABC, abstractmethod
-from inspect import getmembers, getmro, isfunction
-from operator import itemgetter
-from typing import Any, Generic, Mapping, TypeVar
+from inspect import Parameter, getmembers, getmro, isfunction, signature
+from typing import Any, Callable, Generic, Mapping, TypeVar
 
 from .error import ASTTransformError
 from .node import ASTNode
@@ -12,10 +12,46 @@ _VRT = TypeVar("_VRT")
 class ASTVisitor(Generic[_VRT], ABC):
     """A visitor generic base class for an AST visitor.
 
+    Subclasses must implement a generic_visit method that will be called
+    when no matching visit method is found.
+
+    Subclasses can also implement visit_{node_type}(self, node: NodeType) methods
+    that will be called when a matching node is visited.
+
+    Methods are matched by the node type annotation of the second argument. If none
+    is found a TypeError is raised. Type annotations must be simple subclasses of
+    ASTNode, otherwise an exception is raised.
+
+    Optionally, when subclassing, you can set the `validate` class var to True.
+    This will cause the visitor to validate that the method name matches the
+    node type annotation. E.g.
+
+    >>> class MyVisitor(ASTVisitor[None], validate=True):
+    ...     def visit_MyNode(self, node: MyNode) -> None:
+    ...         pass
+    ...     def generic_visit(self, node: ASTNode) -> None:
+    ...         pass
+    ...     def visit_WrongNamedNode(self, node: MyOtherNode) -> None:
+    ...         pass
+
+    This will raise a TypeError because the last method name doesn't match the node
+    type annotation.
+
+    Defaul `visit` method assumes only one argument, the node to visit. If you need
+    to pass additional arguments to the visitor methods, you can override the
+    `generic_visit`, `visit` methods and use the `_dispatch_visit_method` in
+    your `visit` implementation to get a matching visitor method for a given node.
+    Note that this will raise type errors in static type checkers if additional
+    arguments do not have default values.
+
     Args:
         t (_type_): Vistior return type
 
     """
+
+    # This is both a class var for initial cache built at class creation
+    # and an instance var for dispatching to bound methods.
+    __dispatch_cache__: weakref.WeakKeyDictionary[type[ASTNode], Callable[..., _VRT]]
 
     strict: bool = False
     """Strict visitors match visit methods to nodes by exact type.
@@ -24,18 +60,58 @@ class ASTVisitor(Generic[_VRT], ABC):
 
     """
 
+    def __init__(self) -> None:
+        # Create an instance cache for dispatching which will have
+        # bound methods instead of class functions.
+        self.__dispatch_cache__ = weakref.WeakKeyDictionary()
+
+    def _dispatch_visit_method(self, node: ASTNode) -> Callable[..., _VRT]:
+        """Returns a visit method for a given node. Usefull for overriding visit method signature in
+        subclasses.
+
+        Dispatching is done based on `visit_{__class__.__name__}(self, node, ...)`
+        second argument type annotation. By default method name itself is ignored,
+        unless `validate` is set to True when subclassing the visitor.
+
+        If the visitor `strict` class var is True, then visit method is matched by
+        the exact type match. Otherise the node mro is walked in reverse order until
+        until an exact match is found. Unlike stdlib singledispatch, we are not
+        checking for abstract (virtual) base classes.
+
+        """
+
+        visitor_bound_method = self.__dispatch_cache__.get(node.__class__)
+
+        if visitor_bound_method is not None:
+            return visitor_bound_method
+
+        visitor_method = None
+
+        if self.strict:
+            visitor_method = self.__class__.__dispatch_cache__.get(node.__class__)
+        else:
+            mro = getmro(node.__class__)
+            for _class in mro[:-1]:
+                visitor_method = self.__class__.__dispatch_cache__.get(_class, None)
+                if visitor_method is not None:
+                    break
+
+        if visitor_method is not None:
+            visitor_bound_method = visitor_method.__get__(self, self.__class__)
+        else:
+            visitor_bound_method = self.generic_visit
+
+        self.__dispatch_cache__[node.__class__] = visitor_bound_method
+
+        return visitor_bound_method
+
     @abstractmethod
     def generic_visit(self, node: ASTNode) -> _VRT:
         raise NotImplementedError
 
     def visit(self, node: ASTNode) -> _VRT:
-        """Visits the given node by finding and calling a matching visitor method that should have a
-        name in a form of visit_{__class__.__name__} or generic_visit if it doesn't exist.
-
-        If the visitor `strict` class var is True, then visit method is matched by
-        the exact type match. Otherise this method walks the mro until it finds
-        a visit method matching visit_{__class__.__name__}, which means it matches
-        a visitor for the closest super class  of the class of this node.
+        """Visits the given node by finding and calling a matching visitor method or generic_visit
+        if it doesn't exist.
 
         Args:
             node (ASTNode): The node to visit.
@@ -59,44 +135,63 @@ class ASTVisitor(Generic[_VRT], ABC):
             "Hello World"
 
         """
-        visitor_method = None
 
-        if self.strict:
-            visitor_method = getattr(self, f"visit_{node.__class__.__name__}", None)
-        else:
-            mro = getmro(node.__class__)
-            for _class in mro[:-1]:
-                visitor_method = getattr(self, f"visit_{_class.__name__}", None)
-                if visitor_method is not None:
-                    break
-
-        if visitor_method is None:
-            visitor_method = self.generic_visit
-
-        return visitor_method(node)
+        return self._dispatch_visit_method(node)(node)
 
     def __init_subclass__(cls, *, validate: bool = False) -> None:
         """Iterate over new visitor methods and check that names match the node type annotation."""
-        if validate:
-            mismatched_pairs: list[tuple[str, str]] = []
-            for method_name, method in getmembers(cls, isfunction):
-                if method_name.startswith("visit_"):
-                    expected_node_type = method_name[6:]
-                    node_type_annotation = method.__annotations__.get("node", None)
-                    if node_type_annotation is not None:
-                        node_type_str = (
-                            node_type_annotation
-                            if isinstance(node_type_annotation, str)
-                            else node_type_annotation.__name__
+        cls.__dispatch_cache__ = weakref.WeakKeyDictionary()
+
+        errors: list[tuple[str, str]] = []
+        for method_name, method in getmembers(cls, isfunction):
+            if method_name.startswith("visit_"):
+                sig = signature(method, eval_str=True)
+
+                if len(sig.parameters) < 2:
+                    errors.append(
+                        (method_name, "Method must have at least two parameters: self and node")
+                    )
+                    continue
+
+                node_arg_type = list(sig.parameters.values())[1].annotation
+
+                if node_arg_type is Parameter.empty:
+                    errors.append((method_name, "Node type annotation is missing"))
+                    continue
+
+                try:
+                    if not issubclass(node_arg_type, ASTNode):
+                        errors.append(
+                            (method_name, "Node type annotation must be a subclass of ASTNode")
                         )
+                        continue
+                except TypeError:
+                    errors.append(
+                        (method_name, "Node type annotation must be a single ASTNode subclass")
+                    )
+                    continue
 
-                        if expected_node_type != node_type_str:
-                            mismatched_pairs.append((method_name, node_type_str))
+                if validate:
+                    expected_node_type = method_name[6:]
+                    if node_arg_type.__name__ != expected_node_type:
+                        errors.append(
+                            (
+                                method_name,
+                                "Method name doesn't match the second argument type annotation",
+                            )
+                        )
+                        continue
 
-            if mismatched_pairs:
-                raise TypeError(
-                    f"Visitor class '{cls.__name__}' method(s) '{', '.join(itemgetter(0)(pair) for pair in mismatched_pairs)}' do not match node type annotation(s) '{', '.join(itemgetter(1)(pair) for pair in mismatched_pairs)}'"
+                cls.__dispatch_cache__[node_arg_type] = method
+
+        if errors:
+            raise TypeError(
+                f"Visitor class '{cls.__name__}' method(s) have invalid signature(s):\n  - "
+                + "\n  - ".join(
+                    f"'{method_name}': {error}"
+                    for method_name, error in sorted(errors, key=lambda x: x[0])
                 )
+            )
 
         return super().__init_subclass__()
 
