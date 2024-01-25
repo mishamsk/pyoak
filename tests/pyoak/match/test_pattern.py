@@ -4,7 +4,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-from pyoak.match.pattern import BaseMatcher, validate_pattern
+from pyoak.match.error import ASTXpathOrPatternDefinitionError
+from pyoak.match.pattern import BaseMatcher, NodeMatcher, from_pattern, validate_pattern
 from pyoak.node import ASTNode
 from pyoak.origin import NO_ORIGIN, Origin
 
@@ -171,6 +172,18 @@ def test_correct_pattern_grammar(rule: str, pattern_def: str, clean_ser_types) -
     res, msg = validate_pattern(pattern_def)
     assert res, f"Error in rule {rule}: {msg}"
 
+    # now the same but trying to create a matcher
+    try:
+        _ = BaseMatcher.from_pattern(pattern_def)
+    except ASTXpathOrPatternDefinitionError as e:
+        assert False, f"Raised on rule {rule}: {e}"
+
+    # and using the standard function
+    try:
+        _ = from_pattern(pattern_def)
+    except ASTXpathOrPatternDefinitionError as e:
+        assert False, f"Raised on rule {rule}: {e}"
+
 
 @pytest.mark.parametrize(
     "pattern, expected_msg",
@@ -257,6 +270,12 @@ def test_incorrect_pattern_grammar(pattern: str, expected_msg: str) -> None:
     res, msg = validate_pattern(pattern)
     assert not res
     assert expected_msg == msg[: len(expected_msg)], pattern
+
+    # now the same but trying to create a matcher
+    with pytest.raises(ASTXpathOrPatternDefinitionError) as excinfo:
+        from_pattern(pattern)
+
+    assert expected_msg == str(excinfo.value)[: len(expected_msg)], pattern
 
 
 def test_props_match_and_capture(clean_ser_types) -> None:
@@ -631,7 +650,7 @@ def test_same_name_capture() -> None:
     assert set(match_dict.keys()) == {"cap"}
 
 
-def test_with_patter() -> None:
+def test_with_pattern() -> None:
     # Create a binary tree
     node = BinOp(
         left=BinOp(
@@ -658,3 +677,54 @@ def test_with_patter() -> None:
     ok, match_dict = matcher.match(node)
     assert ok
     assert match_dict["vals"] == (1, 2, 3, 4, 5, 6, 7, 8)
+
+
+def test_from_pattern_with_default_types() -> None:
+    pattern_def = "(PTestParent)"
+    matcher = from_pattern(pattern_def)
+    assert isinstance(matcher, NodeMatcher)
+    assert matcher.types == (PTestParent,)
+
+
+def test_from_pattern_with_custom_types(clean_ser_types) -> None:
+    class DifferentPTestParent(ASTNode):
+        foo: str
+
+    pattern_def = "(PTestParent)"
+    custom_types = {
+        "PTestParent": DifferentPTestParent,
+    }
+    matcher = from_pattern(pattern_def, types=custom_types)
+    assert isinstance(matcher, NodeMatcher)
+    assert matcher.types == (DifferentPTestParent,)
+
+
+def test_pattern_cache() -> None:
+    pattern_def = "(PTestParent @foo)"
+    types = {
+        "PTestParent": PTestParent,
+    }
+
+    # First call should create a new matcher and add it to the cache
+    matcher1 = from_pattern(pattern_def, types=types)
+
+    # Same pattern and same types should return the same matcher
+    assert from_pattern(pattern_def, types=types) is matcher1
+
+    # Different types should create a new matcher
+    types2 = {
+        "PTestParent": PTestParent,
+        "PTestChild1": PTestChild1,
+    }
+
+    matcher2 = from_pattern(pattern_def, types=types2)
+    assert matcher2 is not matcher1
+    # but effectively the same matcher
+    assert matcher2 == matcher1
+
+    # Also ensure that cache is using both type name and actual type
+    # notice we are giving a different type for PTestParent
+    assert from_pattern(pattern_def, types={"PTestParent": PTestChild1}) is not matcher1
+
+    # Also test that a different dict with the same types will correctly return the same matcher
+    assert from_pattern(pattern_def, types={"PTestParent": PTestParent}) is matcher1
