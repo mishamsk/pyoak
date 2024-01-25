@@ -35,6 +35,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - TBD
 
+## [3.0.0a10]
+
+Highlight: visitor base class improvements
+
+### 🚀 Added
+
+- add py312 to tox tests & workflows
+- make a standalone from_pattern
+- tests for caching and from_pattern
+
+### ✨ Changed
+
+- use custom cache to preserve from_pattern signature for IDEs
+
+### 🛠️ Internal
+
+- in traversal bench use python timeit default formatting
+
 ## [3.0.0a9]
 
 Highlight: visitor base class improvements
