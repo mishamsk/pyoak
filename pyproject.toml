@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "pyoak"
-version = "3.0.0a9"
+version = "3.0.0a10"
 homepage = "https://github.com/mishamsk/pyoak"
 description = "Library for building and working with arbitrary ASTs on top dataclasses"
 authors = ["Mike Perlov <mishamsk@gmail.com>"]
