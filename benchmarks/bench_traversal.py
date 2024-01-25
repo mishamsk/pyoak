@@ -17,12 +17,15 @@ def run_benchmark():
         f"Time to build tree with {len(list(tree.dfs()))} nodes: {time.monotonic() - st:.6f} seconds"
     )
 
-    n = 10
-    ttime = timeit.timeit(lambda: list(tree.dfs()), number=n)
-    print(f"Queue based DFS (invocations: {n}): {ttime:.6f} seconds")
+    timer = timeit.Timer(lambda: list(tree.dfs()))
+    n, _ = timer.autorange()
+    ttime = timer.repeat(number=n)
+    print(f"Queue based DFS. {n} loops, best of 5: {min(ttime):.6f} seconds")
 
-    ttime = timeit.timeit(lambda: list(tree.bfs()), number=n)
-    print(f"Queue based BFS (invocations: {n}): {ttime:.6f} seconds")
+    timer = timeit.Timer(lambda: list(tree.bfs()))
+    n, _ = timer.autorange()
+    ttime = timer.repeat(number=n)
+    print(f"Queue based BFS. {n} loops, best of 5: {min(ttime):.6f} seconds")
 
 
 if __name__ == "__main__":

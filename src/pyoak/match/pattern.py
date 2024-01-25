@@ -4,7 +4,6 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -27,6 +26,62 @@ logger = logging.getLogger(__name__)
 _Vars = Mapping[str, Any]
 _MatchRes = tuple[bool, _Vars]
 _SeqMatchRes = tuple[bool, _Vars, int]
+
+_PATTERN_CACHE: dict[int, BaseMatcher] = {}
+
+
+def _make_key(pattern_def: str, types: Mapping[str, type[Any]]) -> int:
+    """Create a key for the LRU cache based on pattern definition and types."""
+    return hash((pattern_def, tuple(types.items())))
+
+
+def from_pattern(pattern_def: str, types: Mapping[str, type[Any]] | None = None) -> BaseMatcher:
+    """Create a Matcher from a pattern definition.
+
+    Args:
+        pattern_def: The pattern definition to parse.
+        types: An optional mapping of AST class names to their types. If not provided,
+            the default mapping from `pyoak.serialize` is used.
+
+    Returns:
+        A BaseMatcher instance.
+
+    Raises:
+        ASTXpathOrPatternDefinitionError: Raised if the pattern definition is incorrect
+
+    """
+    if types is None:
+        # Only import if needed
+        from ..serialize import TYPES
+
+        types = TYPES
+
+    # Check cache
+    key = _make_key(pattern_def, types)
+
+    matcher = _PATTERN_CACHE.get(key, None)
+
+    if matcher is not None:
+        return matcher
+
+    # Import here to avoid circular imports
+    from .parser import Parser
+
+    try:
+        matcher = Parser(types).parse_pattern(pattern_def)
+    except ASTXpathOrPatternDefinitionError:
+        raise
+    except Exception as e:
+        if config.TRACE_LOGGING:
+            logger.debug(f"Unexpected error during pattern definition grammar generation: {e}")
+
+        raise ASTXpathOrPatternDefinitionError(
+            "Failed to parse a tree pattern due to internal error. Please report it!"
+        ) from e
+
+    _PATTERN_CACHE[key] = matcher
+
+    return matcher
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,45 +144,7 @@ class BaseMatcher(ABC):
 
         return (True, {**new_vars, self.name: value})
 
-    @staticmethod
-    @lru_cache(maxsize=None)
-    def from_pattern(pattern_def: str, types: Mapping[str, type[Any]] | None = None) -> BaseMatcher:
-        """Create a Matcher from a pattern definition.
-
-        Args:
-            pattern_def: The pattern definition to parse.
-            types: An optional mapping of AST class names to their types. If not provided,
-                the default mapping from `pyoak.serialize` is used.
-
-        Returns:
-            A BaseMatcher instance.
-
-        Raises:
-            ASTXpathOrPatternDefinitionError: Raised if the pattern definition is incorrect
-
-        """
-        if types is None:
-            # Only import if needed
-            from ..serialize import TYPES
-
-            types = TYPES
-
-        # Import here to avoid circular imports
-        from .parser import Parser
-
-        try:
-            matcher = Parser(types).parse_pattern(pattern_def)
-        except ASTXpathOrPatternDefinitionError:
-            raise
-        except Exception as e:
-            if config.TRACE_LOGGING:
-                logger.debug(f"Unexpected error during pattern definition grammar generation: {e}")
-
-            raise ASTXpathOrPatternDefinitionError(
-                "Failed to parse a tree pattern due to internal error. Please report it!"
-            ) from e
-
-        return matcher
+    from_pattern = staticmethod(from_pattern)
 
 
 class WildcardMatcher(BaseMatcher, ABC):
