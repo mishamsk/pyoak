@@ -5,6 +5,7 @@ name: release & publish workflow
 on:
   push:
     tags:
+      - "!v3*" # temporarily ignore v3 tags, very alpha...
       - "v*"
 
   workflow_dispatch:
@@ -77,6 +78,16 @@ jobs:
           echo ::set-output name=current_version::${GITHUB_REF#refs/tags/v}
         shell: bash
 
+      - name: Set pre-release flag
+        id: pre_release
+        run: |
+          if [[ ${{ steps.tag_name.outputs.current_version }} =~ (a|b|rc) ]]; then
+            echo ::set-output name=pre_release::true
+          else
+            echo ::set-output name=pre_release::false
+          fi
+        shell: bash
+
       - uses: actions/checkout@v3
 
       - name: Get Changelog Entry
@@ -101,10 +112,10 @@ jobs:
           body: ${{ steps.changelog_reader.outputs.changes }}
           files: dist/*.whl
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.pre_release.pre_release }}
 
   publish:
-    name: Publish to Test PyPI
+    name: Publish to PyPI
     needs: build
     runs-on: ubuntu-latest
 

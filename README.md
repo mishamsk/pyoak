@@ -4,23 +4,29 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Test Status](https://github.com/mishamsk/pyoak/actions/workflows/dev.yml/badge.svg)](https://github.com/mishamsk/pyoak/actions/workflows/dev.yml)
 
-Commerial-grade, well tested, documented and typed Python library for modeling, building, traversing, transforming, transferring and even pattern matching abstract syntax trees (AST) for arbtirary languages.
+Commerial-grade, well tested, documented, strongly typed pure Python library with almost no external dependencies for modeling, building, traversing, transforming, transferring and even pattern matching abstract syntax trees (AST) for arbtirary languages.
+
+> :loudspeaker: **NOTICE**: :loudspeaker:
+>
+> This branch is in active development. It is an early alpha of the next version that will combine the best of v1 and v2. We are expanding core features, focusing on performance for huge trees, and eliminating everything that can be easily added externally. Please be aware that this version may contain unstable features and bugs.
 
 ## Features<!-- omit from toc -->
 
 * 🌳 Easy to use dataclasses based, strictly typed, pseudo-immutable AST modeling
-* 📝 "Magic", auto-maintained node registry, allowing node cross-referncing and retrievel
+* ~~📝 "Magic", auto-maintained node registry, allowing node cross-referncing and retrievel~~
 * 📚 Source origin tracking for each node
-* 📺 Zero-setup pretty printing using [Rich](https://github.com/willmcgugan/rich)
+* 📺 [Optional] Zero-setup pretty printing using [Rich](https://github.com/willmcgugan/rich)
 * 💾 json, msgpack, yaml or plain dict (de)serialization
 * 🏃‍♀️ AST traversal: depth-first or breadth-first, top down or bottom up, with filtering and pruning
 * 🎯 Xpath-like AST search (top to the node)
 * 👯‍♂️ Node pattern matching with ability to capture specific sub-trees or attributes
+* ✅ [Opt-in] Strict-mode with runtime field value type checking
 * ... and more!
 
 ## Feature Roadmap<!-- omit from toc -->
-* Strict-mode with runtime field value type checking
-* Frozen version of ASTNode
+* Frozen, slotted ASTNode optimized for quick creation and transformation
+* On-demand only id & content_id generation
+* Pattern matching superpowers (recursive patterns, parametrization, etc.)
 * ~~rustify some parts for performance~~ well, that's too far-fetched
 
 ## Table of Contents <!-- omit from toc -->
