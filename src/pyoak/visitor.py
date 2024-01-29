@@ -1,7 +1,6 @@
-import weakref
 from abc import ABC, abstractmethod
 from inspect import Parameter, getmembers, getmro, isfunction, signature
-from typing import Any, Callable, Generic, Mapping, TypeVar
+from typing import Any, Callable, ClassVar, Generic, Mapping, TypeVar
 
 from .error import ASTTransformError
 from .node import ASTNode
@@ -21,6 +20,10 @@ class ASTVisitor(Generic[_VRT], ABC):
     Methods are matched by the node type annotation of the second argument. If none
     is found a TypeError is raised. Type annotations must be simple subclasses of
     ASTNode, otherwise an exception is raised.
+
+    Note that visitor method dispatch logic is cached at class creation time (for
+    method functions) and bound methods are cached on instances. Thus monkey patching
+    visitor methods will not work.
 
     Optionally, when subclassing, you can set the `validate` class var to True.
     This will cause the visitor to validate that the method name matches the
@@ -51,9 +54,9 @@ class ASTVisitor(Generic[_VRT], ABC):
 
     # This is both a class var for initial cache built at class creation
     # and an instance var for dispatching to bound methods.
-    __dispatch_cache__: weakref.WeakKeyDictionary[type[ASTNode], Callable[..., _VRT]]
+    __dispatch_cache__: dict[type[ASTNode], Callable[..., _VRT]]
 
-    strict: bool = False
+    strict: ClassVar[bool] = False
     """Strict visitors match visit methods to nodes by exact type.
 
     Non-strict visitors will match by isinstance check in MRO order.
@@ -63,7 +66,7 @@ class ASTVisitor(Generic[_VRT], ABC):
     def __init__(self) -> None:
         # Create an instance cache for dispatching which will have
         # bound methods instead of class functions.
-        self.__dispatch_cache__ = weakref.WeakKeyDictionary()
+        self.__dispatch_cache__ = {}
 
     def _dispatch_visit_method(self, node: ASTNode) -> Callable[..., _VRT]:
         """Returns a visit method for a given node. Usefull for overriding visit method signature in
@@ -80,28 +83,38 @@ class ASTVisitor(Generic[_VRT], ABC):
 
         """
 
+        # Check if we already have a bound method for this node type
         visitor_bound_method = self.__dispatch_cache__.get(node.__class__)
 
         if visitor_bound_method is not None:
+            # We have a bound method, return it
             return visitor_bound_method
 
+        # We don't have a bound method. First fund an undound visitor method
         visitor_method = None
 
         if self.strict:
+            # Strict mode, match by exact type only
             visitor_method = self.__class__.__dispatch_cache__.get(node.__class__)
         else:
+            # Non-strict mode, match by MRO
             mro = getmro(node.__class__)
             for _class in mro[:-1]:
                 visitor_method = self.__class__.__dispatch_cache__.get(_class, None)
                 if visitor_method is not None:
                     break
 
-        if visitor_method is not None:
-            visitor_bound_method = visitor_method.__get__(self, self.__class__)
-        else:
-            visitor_bound_method = self.generic_visit
+        if visitor_method is None:
+            # If we didn't find a visitor method, use generic_visit
+            visitor_method = self.__class__.generic_visit
 
-        self.__dispatch_cache__[node.__class__] = visitor_bound_method
+        # Cache the undound method (this may just rewrite the existing one)
+        self.__class__.__dispatch_cache__[node.__class__] = visitor_method
+
+        # Create a bound method and cache it
+        self.__dispatch_cache__[node.__class__] = visitor_bound_method = visitor_method.__get__(
+            self, self.__class__
+        )
 
         return visitor_bound_method
 
@@ -140,12 +153,21 @@ class ASTVisitor(Generic[_VRT], ABC):
 
     def __init_subclass__(cls, *, validate: bool = False) -> None:
         """Iterate over new visitor methods and check that names match the node type annotation."""
-        cls.__dispatch_cache__ = weakref.WeakKeyDictionary()
+        cls.__dispatch_cache__ = {}
 
         errors: list[tuple[str, str]] = []
         for method_name, method in getmembers(cls, isfunction):
             if method_name.startswith("visit_"):
-                sig = signature(method, eval_str=True)
+                try:
+                    sig = signature(method, eval_str=True)
+                except Exception as e:
+                    errors.append(
+                        (
+                            method_name,
+                            f"Invalid signature or a string annotation that can't be resolved: {e}",
+                        )
+                    )
+                    continue
 
                 if len(sig.parameters) < 2:
                     errors.append(
