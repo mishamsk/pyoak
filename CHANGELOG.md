@@ -9,15 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🚀 Added
 
-- Gracefully handle string annotation resolution errors in visitor
-- ASTXpath now support equality comparison
-- Allow tree alternatives in xpath
+- TBD
 
 ### ✨ Changed
 
-- Use regular dict for visitor dispatch cache. Weakref is not needed, since methods will always be alive as long as the class is alive.
-- Clarify visitor dispatch cache behavior & limitations in docstring
-- Expand visitor tests
+- TBD
 
 ### ⚠️ Breaking
 
@@ -25,9 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixed
 
-- ASTXpath cache accounts for types mapping that was passed to it
-- Xpathes will now forbid incorrect order and duplicate items in element definitions
-- Fix ASTVisitor dispatching for multiple inheritance
+- TBD
 
 ### 🔥 Removed
 
@@ -40,6 +34,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🛠️ Internal
 
 - TBD
+
+## [3.0.0a11]
+
+### 🚀 Added
+
+- Gracefully handle string annotation resolution errors in visitor
+- ASTXpath now support equality comparison
+- Allow tree alternatives in xpath
+
+### ✨ Changed
+
+- Use regular dict for visitor dispatch cache. Weakref is not needed, since methods will always be alive as long as the class is alive.
+- Clarify visitor dispatch cache behavior & limitations in docstring
+- Expand visitor tests
+
+### 🐛 Fixed
+
+- ASTXpath cache accounts for types mapping that was passed to it
+- Xpathes will now forbid incorrect order and duplicate items in element definitions
+- Fix ASTVisitor dispatching for multiple inheritance
 
 ## [3.0.0a10]
 
