@@ -93,7 +93,12 @@ def _match_node_xpath(
     return False
 
 
-_AST_XPATH_CACHE: dict[str, ASTXpath] = {}
+_AST_XPATH_CACHE: dict[int, ASTXpath] = {}
+
+
+def _make_key(xpath: str, types: Mapping[str, type[Any]]) -> int:
+    """Create a key for the cache based on pattern definition and types."""
+    return hash((xpath, tuple(types.items())))
 
 
 # A helper class used in the xpath find method
@@ -105,10 +110,19 @@ class _DUMMY_XPATH_ROOT(ASTNode):
 class ASTXpath:
     """A parsed XPath for AST nodes."""
 
-    def __new__(cls, xpath: str) -> ASTXpath:
-        if xpath not in _AST_XPATH_CACHE:
-            _AST_XPATH_CACHE[xpath] = super().__new__(cls)
-        return _AST_XPATH_CACHE[xpath]
+    def __new__(cls, xpath: str, types: Mapping[str, type[Any]] | None = None) -> ASTXpath:
+        if types is None:
+            # Only import if needed
+            from ..serialize import TYPES
+
+            types = TYPES
+
+        key = _make_key(xpath, types)
+
+        if key not in _AST_XPATH_CACHE:
+            _AST_XPATH_CACHE[key] = super().__new__(cls)
+
+        return _AST_XPATH_CACHE[key]
 
     def __init__(self, xpath: str, types: Mapping[str, type[Any]] | None = None) -> None:
         """Initialize the xpath.
@@ -142,6 +156,12 @@ class ASTXpath:
             raise ASTXpathOrPatternDefinitionError(
                 "Failed to parse Xpath due to internal error. Please report it!"
             ) from e
+
+    def __eq__(self, __value: object) -> bool:
+        if isinstance(__value, ASTXpath):
+            return self._elements_reversed == __value._elements_reversed
+
+        return NotImplemented
 
     def match(self, node: ASTNode, *, ancestors: Sequence[ASTNode] | None = None) -> bool:
         """Match the `node` to the xpath.

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🚀 Added
 
 - Gracefully handle string annotation resolution errors in visitor
+- ASTXpath now support equality comparison
 
 ### ✨ Changed
 
@@ -23,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixed
 
-- TBD
+- ASTXpath cache accounts for types mapping that was passed to it
 
 ### 🔥 Removed
 

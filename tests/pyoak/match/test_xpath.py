@@ -33,13 +33,38 @@ class XpathRoot(ASTNode):
     middle_tuple: tuple[XpathMiddle, ...]
 
 
-def test_init() -> None:
-    xpath = ASTXpath("//XpathNested")
+def test_xpath_cache() -> None:
+    xpath_str = "//XpathNested"
+    types = {
+        "XpathNested": XpathNested,
+    }
 
-    # Test caching
-    assert xpath is ASTXpath("//XpathNested")
-    assert xpath is not ASTXpath("//XpathNestedSub")
+    # First call should create a new xpath and add it to the cache
+    xpath = ASTXpath(xpath_str, types=types)
 
+    # Same xpath and same types should return the same xpath object
+    assert ASTXpath(xpath_str, types=types) is xpath
+
+    # Different types should create a new xpath object
+    types2 = {
+        "XpathNested": XpathNested,
+        "XpathMiddle": XpathMiddle,
+    }
+
+    xpath2 = ASTXpath(xpath_str, types=types2)
+    assert xpath2 is not xpath
+    # but effectively the same matcher
+    assert xpath2 == xpath
+
+    # Also ensure that cache is using both type name and actual type
+    # notice we are giving a different type for PTestParent
+    assert ASTXpath(xpath_str, types={"XpathNested": XpathMiddle}) is not xpath
+
+    # Also test that a different dict with the same types will correctly return the same matcher
+    assert ASTXpath(xpath_str, types={"XpathNested": XpathNested}) is xpath
+
+
+def test_validation() -> None:
     # Test non-existent class
     with pytest.raises(ASTXpathOrPatternDefinitionError) as excinfo:
         ASTXpath("NonExistentClass")
