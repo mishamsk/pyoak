@@ -345,7 +345,8 @@ Each path is in the format `@parent_field_name[index]type_name_or_pattern` and i
 - The slash is optional at the start of the XPath. If omitted, it is the same as using `//the rest of the path`.
 - `//` is a wildcard (anywhere) that matches any path.
 - `@parent_field_name` and `index` are optional.
-- `type_name_or_pattern` is optional, except for the last path in the XPath. It may be a type name or a `tree` from the pattern matching syntax (see below).
+- `type_name_or_pattern` is optional, except for the last path in the XPath. It may be a type name, a `tree` from the pattern matching syntax (see below), or multiple tree alternatives `"<" tree ("|" tree)* ">".
+    - Notice, that unlike full patterns, pattern references (`#ref`) are not allowed in Xpath.
 
 Types are instance comparisons, so any subclass matches a type.
 

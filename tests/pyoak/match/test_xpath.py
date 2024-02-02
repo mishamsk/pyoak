@@ -64,23 +64,57 @@ def test_xpath_cache() -> None:
     assert ASTXpath(xpath_str, types={"XpathNested": XpathNested}) is xpath
 
 
-def test_validation() -> None:
-    # Test non-existent class
-    with pytest.raises(ASTXpathOrPatternDefinitionError) as excinfo:
-        ASTXpath("NonExistentClass")
+@pytest.mark.parametrize(
+    "xpath_str, types, error_msg",
+    [
+        # Valid cases
+        ("XpathNested", None, None),
+        ("/XpathNested", None, None),
+        ("//XpathNested", None, None),
+        ("//(XpathNested)", None, None),
+        ('//(XpathNested @attr="val")', None, None),
+        ('(XpathNested @attr="val")/XpathNested', None, None),
+        ('(XpathNested @attr="val")//XpathNested', None, None),
+        ('(XpathNested @attr="val")//(XpathNested)', None, None),
+        ('/(XpathNested @attr="val")/XpathNested', None, None),
+        ('/(XpathNested @attr="val")//XpathNested', None, None),
+        ('/(XpathNested @attr="val")//(XpathNested)', None, None),
+        ('//(XpathNested @attr="val")/XpathNested', None, None),
+        ('//(XpathNested @attr="val")//XpathNested', None, None),
+        ('//(XpathNested @attr="val")//(XpathNested)', None, None),
+        ("//@attr[]XpathNested", None, None),
+        ("//@attr[1]XpathNested", None, None),
+        ("//[1]XpathNested", None, None),
+        ("XpathNested/@attr/XpathNested", None, None),
+        ("XpathNested/@attr[1]/XpathNested", None, None),
+        ("XpathNested/[1]/XpathNested", None, None),
+        ("XpathNested/@attr[1]XpathMiddle/XpathNested", None, None),
+        ('//<(XpathNested @attr="val") | (XpathMiddle)>', None, None),
+        # Error cases
+        # Test non-existent class
+        ("NonExistentClass", None, "NonExistentClass"),
+        ("XpathNested", {}, "XpathNested"),
+        # Empty xpath
+        ("", None, "Incorrect xpath definition"),
+        # Missing mandatory right most class spec
+        ("//", None, "Incorrect xpath definition"),
+        ("//@attr[1]", None, "Incorrect xpath definition"),
+        # Multiple attrs
+        ("/@attr1@attr2/XpathNested", None, "Incorrect xpath element definition"),
+        # Wrong order of element parts
+        ("/[1]@attr1/XpathNested", None, "Incorrect xpath element definition"),
+        # Empty alternative
+        ("//<>", None, "Incorrect definition of a tree pattern"),
+    ],
+)
+def test_parsing(xpath_str: str, types: dict[str, type] | None, error_msg: str | None) -> None:
+    if error_msg:
+        with pytest.raises(ASTXpathOrPatternDefinitionError) as excinfo:
+            ASTXpath(xpath_str, types=types)
 
-    assert "NonExistentClass" in str(excinfo.value)
-
-    # Test invalid XPath
-    with pytest.raises(ASTXpathOrPatternDefinitionError) as excinfo:
-        ASTXpath("")
-
-    assert "Incorrect xpath definition" in str(excinfo.value)
-
-    with pytest.raises(ASTXpathOrPatternDefinitionError) as excinfo:
-        ASTXpath("//")
-
-    assert "Incorrect xpath definition" in str(excinfo.value)
+        assert error_msg in str(excinfo.value)
+    else:
+        assert ASTXpath(xpath_str, types=types), "Should not raise an error"
 
 
 def test_xpath_match() -> None:
@@ -159,6 +193,12 @@ def test_xpath_match() -> None:
     assert xpath.match(n2)
     assert not xpath.match(n)
     assert not xpath.match(n1)
+
+    # With alternatives
+    xpath = ASTXpath('//<(XpathNested @attr="test") | (XpathNestedSub @attr="test2")>')
+    assert xpath.match(n2)
+    assert xpath.match(n)
+    assert xpath.match(n1)
 
     # With faked ancestors
     # First validate that it is correct with default ancestors

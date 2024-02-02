@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Gracefully handle string annotation resolution errors in visitor
 - ASTXpath now support equality comparison
+- Allow tree alternatives in xpath
 
 ### ✨ Changed
 
@@ -25,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🐛 Fixed
 
 - ASTXpath cache accounts for types mapping that was passed to it
+- Xpathes will now forbid incorrect order and duplicate items in element definitions
 - Fix ASTVisitor dispatching for multiple inheritance
 
 ### 🔥 Removed

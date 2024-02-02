@@ -15,7 +15,9 @@ field_spec: "@" CNAME
 
 index_spec: "[" DIGIT* "]"
 
-class_spec: CNAME | tree
+class_spec: CNAME | tree | xpath_pattern_alt
+
+xpath_pattern_alt: "<" tree ("|" tree)* ">"
 
 with_pattern: ("WITH" pattern_alias_def ("," pattern_alias_def)*)? pattern_alt
 
@@ -894,13 +896,13 @@ class Parser:
 
     def _xpath(self) -> Sequence[ASTXpathElement]:
         """xpath: element* self"""
-        elements = []
+        elements: list[tuple[str | None, int | None, type[ASTNode] | BaseMatcher | None]] = []
 
         # Collect elements. Since hit_eoq will only work (i.e. show that there no more tokens)
         # after the first call to peek, which in turn only happens inside `_element` call
         # this will effectively check that xpath is not empty, because `_element` will raise
         # an error if there are no more tokens
-        while not self._lexer.hit_eoq:
+        while self._lexer.peek() is not None:
             elements.append(self._element())
 
         # Check that the last item (self) is not empty
@@ -953,9 +955,10 @@ class Parser:
                 if not is_any:
                     ast_class_or_pattern = ast_class_or_pattern or ASTNode
 
+            assert ast_class_or_pattern is not None
             ret.append(
                 ASTXpathElement(
-                    ast_class_or_pattern=cast(type[ASTNode] | NodeMatcher, ast_class_or_pattern),
+                    ast_class_or_pattern=ast_class_or_pattern,
                     parent_field=parent_field,
                     parent_index=parent_index,
                     anywhere=False,
@@ -964,34 +967,31 @@ class Parser:
 
         return ret
 
-    def _element(self) -> tuple[str | None, int | None, type[ASTNode] | NodeMatcher | None]:
+    def _element(self) -> tuple[str | None, int | None, type[ASTNode] | BaseMatcher | None]:
         """element: "/" field_spec? index_spec? class_spec?"""
 
-        type_or_pattern: type[ASTNode] | NodeMatcher | None = None
+        type_or_pattern: type[ASTNode] | BaseMatcher | None = None
         parent_field: str | None = None
         parent_index: int | None = None
 
         self._match_or_raise(TokenType.FSLASH, "Incorrect xpath element definition.")
 
-        while not self._lexer.hit_eoq:
-            match self._lexer.peek():
-                case TokenType.AT:
-                    parent_field = self._field_spec()
-                    continue
-                case TokenType.LBRACKET:
-                    parent_index = self._index_spec()
-                    continue
-                case TokenType.CNAME | TokenType.NONE | TokenType.WITH | TokenType.AS:
-                    # reserved keywords may be used as class names
-                    # although None can't really be used as a class name
-                    # but for simplicty with other places we just include it here
-                    type_or_pattern = self._class_spec()
-                    continue
-                case TokenType.LPAREN:
-                    type_or_pattern = self._tree()
-                    continue
-                case _:
-                    break
+        if self._lexer.peek() == TokenType.AT:
+            parent_field = self._field_spec()
+
+        if self._lexer.peek() == TokenType.LBRACKET:
+            parent_index = self._index_spec()
+
+        match self._lexer.peek():
+            case TokenType.CNAME | TokenType.NONE | TokenType.WITH | TokenType.AS:
+                # reserved keywords may be used as class names
+                # although None can't really be used as a class name
+                # but for simplicty with other places we just include it here
+                type_or_pattern = self._class_spec()
+            case TokenType.LPAREN:
+                type_or_pattern = self._tree()
+            case TokenType.LT:
+                type_or_pattern = self._xpath_pattern_alt()
 
         return parent_field, parent_index, type_or_pattern
 
@@ -1039,6 +1039,37 @@ class Parser:
 
         return type_
 
+    def _xpath_pattern_alt(self) -> AlternativeMatcher | NodeMatcher:
+        """xpath_pattern_alt: "<" tree ("|" tree)* ">"""
+        matchers: list[NodeMatcher] = []
+
+        # This will never raise, since we actually call this method on LT only, but...
+        self._match_or_raise(TokenType.LT, "Incorrect tree alternative definition in xpath.")
+
+        while not self._lexer.hit_eoq:
+            matcher = self._tree()
+
+            matchers.append(matcher)
+
+            if self._lexer.peek() != TokenType.PIPE:
+                break
+
+            self._lexer.consume()
+
+        # Check for empty pattern. This is not allowed
+        if not matchers:
+            # As of today this will never really hit, because tree rule call above will raise
+            raise ASTXpathOrPatternDefinitionError(
+                "Empty tree alternative definition in xpath. Make sure to include at least one tree pattern."
+            )
+
+        self._match_or_raise(TokenType.GT, "Incorrect tree alternative definition in xpath.")
+
+        if len(matchers) == 1:
+            return matchers[0]
+
+        return AlternativeMatcher(matchers=tuple(matchers))
+
     def _pattern_alt(self) -> AlternativeMatcher | NodeMatcher | PatternRefMatcher:
         """pattern_alt: "<" tree_or_ref ("|" tree_or_ref)* ">" | tree_or_ref ("|" tree_or_ref)*"""
         matchers: list[NodeMatcher | PatternRefMatcher] = []
@@ -1064,6 +1095,7 @@ class Parser:
 
         # Check for empty pattern. This is not allowed
         if not matchers:
+            # As of today this will never really hit, because _tree_or_ref rule call above will raise
             raise ASTXpathOrPatternDefinitionError(
                 "Empty pattern definition. Make sure to include at least one tree pattern."
             )
@@ -1588,7 +1620,7 @@ class Parser:
             ret = self._with_pattern()
 
             # This is the top-level alternative, so it must be the last thing in the pattern
-            if not self._lexer.hit_eoq and (next_tok := self._lexer.peek()):
+            if (next_tok := self._lexer.peek()) is not None:
                 raise self._get_grammar_error_exception(
                     "Incorrect tree pattern definition.",
                     [TokenType._EOF],
