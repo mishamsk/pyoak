@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🐛 Fixed
 
 - ASTXpath cache accounts for types mapping that was passed to it
+- Fix ASTVisitor dispatching for multiple inheritance
 
 ### 🔥 Removed
 

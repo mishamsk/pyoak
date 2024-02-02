@@ -20,7 +20,15 @@ def test_non_strict_visitor(clean_ser_types) -> None:
         pass
 
     @dataclass
-    class Sibling(Base):
+    class SubSibling(Base):
+        pass
+
+    @dataclass
+    class SubSubSibling(Sub):
+        pass
+
+    @dataclass
+    class Multi(SubSub, SubSubSibling):  # order matters, tests visitor class cache pollution
         pass
 
     class FooVisitor(ASTVisitor[str]):
@@ -33,6 +41,9 @@ def test_non_strict_visitor(clean_ser_types) -> None:
         def visit_Sub(self, node: Sub) -> str:
             return "foo visit sub"
 
+        def visit_SubSubSibling(self, node: SubSubSibling) -> str:
+            return "foo visit SubSubSibling"
+
     class BarVisitor(FooVisitor):
         def generic_visit(self, node: ASTNode) -> str:
             return "bar generic visit"
@@ -40,22 +51,26 @@ def test_non_strict_visitor(clean_ser_types) -> None:
         def visit_SubSub(self, node: SubSub) -> str:
             return "bar visit subsub"
 
-        def visit_Sibling(self, node: Sibling) -> str:
-            return "bar visit sibling"
+        def visit_SubSibling(self, node: SubSibling) -> str:
+            return "bar visit Subsibling"
 
     # First test foo visitor
     foo_visitor = FooVisitor()
     assert foo_visitor.visit(Base()) == "foo visit: foo generic visit"
     assert foo_visitor.visit(Sub()) == "foo visit: foo visit sub"
     assert foo_visitor.visit(SubSub()) == "foo visit: foo visit sub"
-    assert foo_visitor.visit(Sibling()) == "foo visit: foo generic visit"
+    assert foo_visitor.visit(SubSibling()) == "foo visit: foo generic visit"
+    assert foo_visitor.visit(SubSubSibling()) == "foo visit: foo visit SubSubSibling"
+    assert foo_visitor.visit(Multi()) == "foo visit: foo visit SubSubSibling"
 
     # Then test bar visitor
     bar_visitor = BarVisitor()
     assert bar_visitor.visit(Base()) == "foo visit: bar generic visit"
     assert bar_visitor.visit(Sub()) == "foo visit: foo visit sub"
     assert bar_visitor.visit(SubSub()) == "foo visit: bar visit subsub"
-    assert bar_visitor.visit(Sibling()) == "foo visit: bar visit sibling"
+    assert bar_visitor.visit(SubSibling()) == "foo visit: bar visit Subsibling"
+    assert bar_visitor.visit(SubSubSibling()) == "foo visit: foo visit SubSubSibling"
+    assert bar_visitor.visit(Multi()) == "foo visit: bar visit subsub"
 
 
 def test_strict_visitor(clean_ser_types) -> None:
@@ -72,7 +87,15 @@ def test_strict_visitor(clean_ser_types) -> None:
         pass
 
     @dataclass
-    class Sibling(Base):
+    class SubSibling(Base):
+        pass
+
+    @dataclass
+    class SubSubSibling(Sub):
+        pass
+
+    @dataclass
+    class Multi(SubSub, SubSubSibling):  # order matters, tests visitor class cache pollution
         pass
 
     class FooVisitor(ASTVisitor[str]):
@@ -87,6 +110,9 @@ def test_strict_visitor(clean_ser_types) -> None:
         def visit_Sub(self, node: Sub) -> str:
             return "foo visit sub"
 
+        def visit_SubSubSibling(self, node: SubSubSibling) -> str:
+            return "foo visit SubSubSibling"
+
     class BarVisitor(FooVisitor):
         def generic_visit(self, node: ASTNode) -> str:
             return "bar generic visit"
@@ -94,22 +120,26 @@ def test_strict_visitor(clean_ser_types) -> None:
         def visit_SubSub(self, node: SubSub) -> str:
             return "bar visit subsub"
 
-        def visit_Sibling(self, node: Sibling) -> str:
-            return "bar visit sibling"
+        def visit_SubSibling(self, node: SubSibling) -> str:
+            return "bar visit Subsibling"
 
     # First test foo visitor
     foo_visitor = FooVisitor()
     assert foo_visitor.visit(Base()) == "foo visit: foo generic visit"
     assert foo_visitor.visit(Sub()) == "foo visit: foo visit sub"
     assert foo_visitor.visit(SubSub()) == "foo visit: foo generic visit"
-    assert foo_visitor.visit(Sibling()) == "foo visit: foo generic visit"
+    assert foo_visitor.visit(SubSibling()) == "foo visit: foo generic visit"
+    assert foo_visitor.visit(SubSubSibling()) == "foo visit: foo visit SubSubSibling"
+    assert foo_visitor.visit(Multi()) == "foo visit: foo generic visit"
 
     # Then test bar visitor
     bar_visitor = BarVisitor()
     assert bar_visitor.visit(Base()) == "foo visit: bar generic visit"
     assert bar_visitor.visit(Sub()) == "foo visit: foo visit sub"
     assert bar_visitor.visit(SubSub()) == "foo visit: bar visit subsub"
-    assert bar_visitor.visit(Sibling()) == "foo visit: bar visit sibling"
+    assert bar_visitor.visit(SubSibling()) == "foo visit: bar visit Subsibling"
+    assert bar_visitor.visit(SubSubSibling()) == "foo visit: foo visit SubSubSibling"
+    assert bar_visitor.visit(Multi()) == "foo visit: bar generic visit"
 
 
 def test_visitor_with_extra_args(clean_ser_types) -> None:
@@ -119,7 +149,7 @@ def test_visitor_with_extra_args(clean_ser_types) -> None:
 
     class FooVisitor(ASTVisitor[str]):
         def visit(self, node: ASTNode, extra_arg: int = 0) -> str:
-            return self._dispatch_visit_method(node)(node, extra_arg)
+            return self._dispatch_visit(node)(node, extra_arg)
 
         def generic_visit(self, node: ASTNode, extra_arg: int = 0) -> str:
             return f"foo generic visit: {extra_arg}"
