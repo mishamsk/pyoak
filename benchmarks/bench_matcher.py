@@ -20,6 +20,8 @@ def run_benchmark():
     all_nodes = list(tree.bfs())
     full_tree_traversal_time = time.monotonic() - st
 
+    print(f"Time to traverse the full tree: {full_tree_traversal_time}")
+
     total_nodes = len(all_nodes)
 
     xpath = '/(Inner @attr1="attr1_[0-9]+")//Leaf'
@@ -34,15 +36,31 @@ def run_benchmark():
     print(f"Time to build new matcher: {time.monotonic() - st}")
 
     st = time.monotonic()
-    leafs = [next(matcher.findall(tree)) for _ in range(N)]
-    leafs = [leaf for leaf in leafs if leaf is not None]
-    print(f"Time to find first {N} items (found {len(leafs)}): {time.monotonic() - st}")
+    leafs = matcher.findall(tree)
+    print(f"Time to find all items matching xpath (found {len(leafs)}): {time.monotonic() - st}")
 
     st = time.monotonic()
-    for leaf in leafs:
+    it = matcher.find(tree)
+    leafs_first_n = [next(it) for _ in range(N)]
+    print(f"Time to find first {N} items (found {len(leafs_first_n)}): {time.monotonic() - st}")
+
+    match_leafs = leafs[:1000]
+    st = time.monotonic()
+    for leaf in match_leafs:
         matcher.match(leaf)
 
-    print(f"Time to match {len(leafs)} items: {time.monotonic() - st}")
+    print(f"Time to match {len(match_leafs)} items against xpath: {time.monotonic() - st}")
+
+    # Pre-calculate ancestors
+    match_leafs_ancestors = [list(reversed(list(leaf.ancestors()))) for leaf in match_leafs]
+
+    st = time.monotonic()
+    for leaf, ancestors in zip(match_leafs, match_leafs_ancestors, strict=True):
+        matcher.match(leaf, ancestors=ancestors)
+
+    print(
+        f"Time to match {len(match_leafs)} items against xpath with known ancestors: {time.monotonic() - st}"
+    )
 
     right_bottom_most_leaf = all_nodes[-1]
 

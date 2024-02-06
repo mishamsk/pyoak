@@ -22,6 +22,11 @@ def run_benchmark():
     ttime = timer.repeat(number=n)
     print(f"Queue based DFS. {n} loops, best of 5: {min(ttime):.6f} seconds")
 
+    timer = timeit.Timer(lambda: list(tree.dfs_with_ancestors()))
+    n, _ = timer.autorange()
+    ttime = timer.repeat(number=n)
+    print(f"Queue based DFS with ancestor tracking. {n} loops, best of 5: {min(ttime):.6f} seconds")
+
     timer = timeit.Timer(lambda: list(tree.bfs()))
     n, _ = timer.autorange()
     ttime = timer.repeat(number=n)

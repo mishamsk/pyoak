@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import Field as DataClassField
 from dataclasses import InitVar, dataclass, field
 from itertools import repeat
-from typing import Any, ClassVar, Iterable, cast
+from typing import Any, ClassVar, Iterable, Sequence, cast
 
 import pytest
 from deepdiff import DeepDiff
@@ -1459,6 +1459,45 @@ def test_walkers() -> None:
         12,
     ]
 
+    # DFS with ancestors
+
+    # no prune
+    assert [
+        (cast(BTreeNode, n).v, _traversed_nodes_to_values(anc))
+        for n, anc in dfs_td.dfs_with_ancestors()
+    ] == [
+        (1, []),
+        (2, [1]),
+        (3, [1, 2]),
+        (4, [1, 2, 3]),
+        (5, [1, 2, 3]),
+        (6, [1, 2, 3, 5]),
+        (7, [1, 2]),
+        (8, [1, 2, 7]),
+        (9, [1]),
+        (10, [1, 9]),
+        (11, [1, 9, 10]),
+        (12, [1, 9, 10, 11]),
+    ]
+
+    # pruned
+    def _prune_wa(n: ASTNode, ancestors: Sequence[ASTNode]) -> bool:
+        return len(ancestors) > 0 and cast(BTreeNode, ancestors[-1]).v == 2
+
+    assert [
+        (cast(BTreeNode, n).v, _traversed_nodes_to_values(anc))
+        for n, anc in dfs_td.dfs_with_ancestors(prune=_prune_wa)
+    ] == [
+        (1, []),
+        (2, [1]),
+        (3, [1, 2]),
+        (7, [1, 2]),
+        (9, [1]),
+        (10, [1, 9]),
+        (11, [1, 9, 10]),
+        (12, [1, 9, 10, 11]),
+    ]
+
     # BFS tree (always top-down)
     bfs_r = cast(
         BTreeNode,
@@ -1579,10 +1618,10 @@ def test_findall() -> None:
         ch1.id,
         sub_ch.id,
     }
-    assert len(list(root.findall("/OtherNode"))) == 0
+    assert len(root.findall("/OtherNode")) == 0
 
     with pytest.raises(ASTXpathOrPatternDefinitionError):
-        next(root.findall("NonExistentClass"))
+        root.findall("NonExistentClass")
 
 
 @dataclass

@@ -45,8 +45,8 @@ def _match_node_xpath(
     Args:
         node (ASTNode): the node to match
         elements (list[ASTXpathElement]): the elements of the xpath
-        ancestors (Sequence[ASTNode]): the ancestors of the node, sorted from the closest to the
-            node to the root
+        ancestors (Sequence[ASTNode]): the ancestors of the node, sorted from the
+            root to the nodes parent, left to right
 
     Returns:
         bool: True if the node matches the xpath, False otherwise
@@ -63,7 +63,7 @@ def _match_node_xpath(
     # Elements are already in reversed order, so we pass the tail of the elements list
     xpath_tail = elements[1:]
 
-    parent: ASTNode | None = ancestors[0] if ancestors else None
+    parent: ASTNode | None = ancestors[-1] if ancestors else None
 
     if len(xpath_tail) == 0:
         # If we werr checking the last element, then there are two options:
@@ -80,14 +80,14 @@ def _match_node_xpath(
     # Otherwise we need to match the remaining elements to the parent
     if element.anywhere:
         # Anywhere means any ancestor can match
-        for i, ancestor in enumerate(ancestors):
-            cur_ancestor_ancestors = ancestors[i + 1 :]
+        for i, ancestor in enumerate(reversed(ancestors)):
+            cur_ancestor_ancestors = ancestors[: -(i + 1)]
 
             if _match_node_xpath(ancestor, xpath_tail, cur_ancestor_ancestors):
                 return True
     else:
         # Otherwise we need to match only the direct parent
-        return _match_node_xpath(parent, xpath_tail, ancestors[1:])
+        return _match_node_xpath(parent, xpath_tail, ancestors[:-1])
 
     # No match
     return False
@@ -168,16 +168,82 @@ class ASTXpath:
 
         Args:
             node: The node to match.
-            ancestors: Pre-computed ancestors of the node, sorted from the closest
-                to the node to the root. If not provided, the node.ancestors() will be used.
+            ancestors: Pre-computed ancestors of the node, sorted from the root
+                to the parent of the node. If not provided, the node.ancestors() will be used.
 
         Returns:
             True if the node matches the xpath, False otherwise.
 
         """
-        return _match_node_xpath(node, self._elements_reversed, ancestors or list(node.ancestors()))
+        if ancestors is None:
+            ancestors = list(node.ancestors())
+            # Ancestor method gives the reverse order
+            ancestors.reverse()
 
-    def findall(self, root: ASTNode) -> Generator[ASTNode, None, None]:
+        return _match_node_xpath(node, self._elements_reversed, ancestors)
+
+    def find(self, root: ASTNode) -> Generator[ASTNode, None, None]:
+        """Find and yield all nodes (subtrees) in the `root` that match the xpath.
+
+        This function is optimized for finding a subset (including one)
+        matching node.
+
+        For getting all the matching subtrees - prefer using `findall`
+
+        """
+        # Using dict, because set is not ordered
+        # Using node ids as keys, because ASTNode is not hashable
+        work: dict[str, ASTNode] = {"_DUMMY_XPATH_ROOT": _DUMMY_XPATH_ROOT(root, origin=NO_ORIGIN)}
+
+        hit_anywhere = False
+        cur_el = 0
+
+        for el in self._elements:
+            new_work: dict[str, ASTNode] = {}
+
+            for node in work.values():
+                if el.anywhere:
+                    # As soon as we hit first anywhere element
+                    # It is cheaper to do just do dfs from each of the
+                    # wor nodes and match, rather than continue with this
+                    # algorithm
+                    hit_anywhere = True
+                    break
+                else:
+                    for n in node.get_child_nodes():
+                        if _match_node_element(n, el):
+                            if n.id not in new_work:
+                                new_work[n.id] = n
+
+            if hit_anywhere or not new_work:
+                break
+
+            work = new_work
+            cur_el += 1
+
+        reversed_remaining_elements = list(reversed(self._elements[cur_el:]))
+
+        if hit_anywhere and reversed_remaining_elements and work:
+            # If we stopped at anywehere element, and thus
+            # must have remaining elements to check against
+            # and we have something in the work, then we do
+            # dfs with ancestor tracking and match
+            for node in work.values():
+                for n, ancestors in node.dfs_with_ancestors(skip_self=True):
+                    # Ancestors will include the node from work, but
+                    # the remaining elements will not include the matching
+                    # element, so we need to skip the first ancestor
+                    if _match_node_xpath(n, reversed_remaining_elements, ancestors[1:]):
+                        yield n
+
+            return
+
+        # no need to check for empty remaining elements, because
+        # if there are any, new_work will be empty anyway and won't
+        # yield anything
+        yield from new_work.values()
+
+    def findall(self, root: ASTNode) -> Sequence[ASTNode]:
         """Find all nodes in the `root` that match the xpath.
 
         Adapted from antlr4-python3-runtime/src/Python3/antlr4/xpath/Xpath.py
@@ -208,4 +274,4 @@ class ASTXpath:
                                 new_work[n.id] = n
             work = new_work
 
-        yield from new_work.values()
+        return tuple(new_work.values())

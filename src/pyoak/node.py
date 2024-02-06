@@ -1011,7 +1011,11 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
             return self.parent.get_depth(relative_to=relative_to, check_ancestor=False) + 1
 
     def ancestors(self) -> Iterator[ASTNode]:
-        """Iterates over all ancestors of this node."""
+        """Iterates over all ancestors of this node.
+
+        Unlike `dfs_with_ancestors`, the order of ancestors is from the closest to the root.
+
+        """
         parent = self.parent
         while parent is not None:
             yield parent
@@ -1159,6 +1163,51 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
         while yield_queue:
             yield yield_queue.popleft()
 
+    def dfs_with_ancestors(
+        self,
+        prune: Callable[[ASTNode, Sequence[ASTNode]], bool] | None = None,
+        skip_self: bool = False,
+    ) -> Generator[tuple[ASTNode, Sequence[ASTNode]], None, None]:
+        """Returns a generator object which visits all nodes in this tree in the DFS (Depth-first)
+        order, returning a tuple (node, ancestors).
+
+        Ancestors are returned as a list of nodes, where the first element is the root node and the
+        last element is the immediate parent of the current node.
+
+        Args:
+            prune (Callable[[ASTNode, Sequence[ASTNode]], bool] | None, optional): An optional function which if it returns True will prevent further decent into the children of this element.
+            skip_self (bool, optional): Doesn't yield self. Defaults to False.
+
+        Yields:
+            Generator[tuple[ASTNode, Sequence[ASTNode]], None, None]: A generator object which visits all nodes in this tree in the DFS (Depth-first) order.
+
+        """
+        queue: Deque[tuple[ASTNode, int]] = deque([(self, 0)])
+        ancestors: list[ASTNode] = []
+
+        if skip_self:
+            # We should start with children, ot self
+            # Hence changing the queue right away
+            ancestors.append(self)
+            queue = deque([(c, 1) for c in reversed(self.children)])
+
+        while queue:
+            node, level = queue.pop()
+
+            # Trim ancestor to the current level
+            ancestors = ancestors[:level]
+
+            # yield the node and curent ancestors
+            yield node, ancestors
+
+            if prune and prune(node, ancestors):
+                continue
+
+            # Now add the node itself as the ancestor
+            # and add all of it's children to the queue
+            ancestors.append(node)
+            queue.extend((child, level + 1) for child in reversed(node.children))
+
     def bfs(
         self,
         prune: Callable[[ASTNode], bool] | None = None,
@@ -1236,13 +1285,13 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
             yield cast(_ASTNodeType, elem)
 
     def find(self, xpath: str | ASTXpath) -> ASTNode | None:
-        """Finds a node by xpath.
+        """Finds the first matching subtree node by xpath.
 
         Args:
             xpath (str | ASTXpath): The xpath to find.
 
         Returns:
-            ASTNode | None: The node if found, otherwise None.
+            ASTNode | None: The node (subtree) if found, otherwise None.
 
         Raises:
             ASTXpathDefinitionError: If the xpath is invalid.
@@ -1254,18 +1303,18 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
             xpath = ASTXpath(xpath)
 
         try:
-            return next(xpath.findall(self))
+            return next(xpath.find(self))
         except StopIteration:
             return None
 
-    def findall(self, xpath: str | ASTXpath) -> Generator[ASTNode, None, None]:
-        """Finds all nodes by xpath.
+    def findall(self, xpath: str | ASTXpath) -> Sequence[ASTNode]:
+        """Finds all subtree nodes matching xpath rooted in this node.
 
         Args:
             xpath (str | ASTXpath): The xpath to find.
 
         Returns:
-            Generator[ASTNode, None, None]: An iterator of nodes.
+            Sequence[ASTNode]: A sequence of matching nodes (subtrees).
 
         Raises:
             ASTXpathDefinitionError: If the xpath is invalid.
@@ -1276,7 +1325,7 @@ class ASTNode(DataClassSerializeMixin, _NodeSlots):
         if isinstance(xpath, str):
             xpath = ASTXpath(xpath)
 
-        yield from xpath.findall(self)
+        return xpath.findall(self)
 
     @classmethod
     def get_property_fields(

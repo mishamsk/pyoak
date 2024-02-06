@@ -9,15 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🚀 Added
 
-- TBD
+- New ASTNode API: `dfs_with_ancestors` - a depth-first search, top-down traversal yielding node and all of it's ancestor from the search root to the node parent.
 
 ### ✨ Changed
 
-- TBD
+- XPath `findall` now returns a tuple instead of a generator and is the fastest way to get all subtrees matching an xpath. The generator version is now available as a new API `find` and optimized for finding a small subset of subtress (including just one).
 
 ### ⚠️ Breaking
 
-- TBD
+- Xpath's `match` method now expects ancestors in the order from root to node parent (reverse of what was expected before)
 
 ### 🐛 Fixed
 
