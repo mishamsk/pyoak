@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🚀 Added
 
+- TBD
+
+### ✨ Changed
+
+- TBD
+
+### ⚠️ Breaking
+
+- TBD
+
+### 🐛 Fixed
+
+- TBD
+
+### 🔥 Removed
+
+- TBD
+
+### 📖 Documentation
+
+- TBD
+
+### 🛠️ Internal
+
+- TBD
+
+## [3.0.0a12]
+
+### 🚀 Added
+
 - New ASTNode API: `dfs_with_ancestors` - a depth-first search, top-down traversal yielding node and all of it's ancestor from the search root to the node parent.
 
 ### ✨ Changed
