@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import logging
 import re
 from abc import ABC, abstractmethod
@@ -12,10 +10,10 @@ from typing import (
 )
 
 from pyoak import config
-from pyoak.match.helpers import get_dataclass_field_names
 
 from ..node import ASTNode
 from .error import ASTXpathOrPatternDefinitionError
+from .helpers import get_dataclass_field_names
 
 if TYPE_CHECKING:
     pass
@@ -27,68 +25,12 @@ _Vars = Mapping[str, Any]
 _MatchRes = tuple[bool, _Vars]
 _SeqMatchRes = tuple[bool, _Vars, int]
 
-_PATTERN_CACHE: dict[int, BaseMatcher] = {}
-
-
-def _make_key(pattern_def: str, types: Mapping[str, type[Any]]) -> int:
-    """Create a key for the LRU cache based on pattern definition and types."""
-    return hash((pattern_def, tuple(types.items())))
-
-
-def from_pattern(pattern_def: str, types: Mapping[str, type[Any]] | None = None) -> BaseMatcher:
-    """Create a Matcher from a pattern definition.
-
-    Args:
-        pattern_def: The pattern definition to parse.
-        types: An optional mapping of AST class names to their types. If not provided,
-            the default mapping from `pyoak.serialize` is used.
-
-    Returns:
-        A BaseMatcher instance.
-
-    Raises:
-        ASTXpathOrPatternDefinitionError: Raised if the pattern definition is incorrect
-
-    """
-    if types is None:
-        # Only import if needed
-        from ..serialize import TYPES
-
-        types = TYPES
-
-    # Check cache
-    key = _make_key(pattern_def, types)
-
-    matcher = _PATTERN_CACHE.get(key, None)
-
-    if matcher is not None:
-        return matcher
-
-    # Import here to avoid circular imports
-    from .parser import Parser
-
-    try:
-        matcher = Parser(types).parse_pattern(pattern_def)
-    except ASTXpathOrPatternDefinitionError:
-        raise
-    except Exception as e:
-        if config.TRACE_LOGGING:
-            logger.debug(f"Unexpected error during pattern definition grammar generation: {e}")
-
-        raise ASTXpathOrPatternDefinitionError(
-            "Failed to parse a tree pattern due to internal error. Please report it!"
-        ) from e
-
-    _PATTERN_CACHE[key] = matcher
-
-    return matcher
-
 
 @dataclass(frozen=True, slots=True)
 class BaseMatcher(ABC):
     """Base class for all matchers.
 
-    Use `from_pattern` to create a matcher from a pattern definition.
+    Use `pattern.from_pattern` to create a matcher from a string pattern definition.
 
     """
 
@@ -108,7 +50,7 @@ class BaseMatcher(ABC):
     def _match(self, value: Any, ctx: _Vars) -> _MatchRes:
         """Internal API to be implemented by concrete matchers.
 
-        Match a value against the pattern and returns whether it had match as well as a dictionary
+        Match a value against the matcher and returns whether it had match as well as a dictionary
         of all captured values by the submatchers. There is no need to add the captured value of
         this matcher to the dictionary as it will be added by the caller.
 
@@ -116,7 +58,7 @@ class BaseMatcher(ABC):
         raise NotImplementedError
 
     def match(self, value: Any, ctx: _Vars | None = None) -> _MatchRes:
-        """Match a value against the pattern."""
+        """Match a value against the matcher."""
 
         if ctx is None:
             ctx = {}
@@ -144,8 +86,6 @@ class BaseMatcher(ABC):
 
         return (True, {**new_vars, self.name: value})
 
-    from_pattern = staticmethod(from_pattern)
-
 
 class WildcardMatcher(BaseMatcher, ABC):
     def _match_seq(self, value: Sequence[Any], ctx: _Vars) -> _SeqMatchRes:
@@ -161,7 +101,7 @@ class WildcardMatcher(BaseMatcher, ABC):
         raise NotImplementedError
 
     def match_seq(self, value: Sequence[Any], ctx: _Vars | None = None) -> _SeqMatchRes:
-        """Match a sequence of values against the pattern and return the remaining values."""
+        """Match a sequence of values against the matcher and return the remaining values."""
         if not isinstance(value, Sequence):
             raise ValueError("match_seq can only be called on sequences")
 
@@ -216,7 +156,10 @@ class AnyMatcher(WildcardMatcher):
 class ValueMatcher(BaseMatcher):
     """Matcher that matches against a constant value.
 
-    In pattern DSL, it is used to match None & empty sequences only.
+    In pattern DSL, it is used to match None & empty sequences only, but if built directly, can
+    match anything.
+
+    Note that ASTNode instances are matched by content, i.e. ignoring origins.
 
     """
 
@@ -235,7 +178,7 @@ class ValueMatcher(BaseMatcher):
 
 @dataclass(frozen=True, slots=True)
 class RegexMatcher(BaseMatcher):
-    """Matcher that matches a value against a regex.
+    """Matcher that matches the string representation of a value against a regex.
 
     In pattern DSL, this is represented as a double quoted escaped string.
 
@@ -259,6 +202,8 @@ class VarMatcher(BaseMatcher):
     """Matcher that matches a value against a previously captured value.
 
     In pattern DSL, this is represented as `$var_name`.
+
+    Note that ASTNode instances are matched by content, i.e. ignoring origins.
 
     """
 
@@ -285,7 +230,7 @@ class SequenceMatcher(BaseMatcher):
     """Matcher that matches a sequence of values against a sequence of matchers.
 
     In pattern DSL, this is represented as `[...]`, a comma separated list of matchers
-    in square brackets with an optional any (`*`) tail matcher.
+    in square brackets.
 
     """
 
@@ -350,7 +295,7 @@ class QualifierMatcher(WildcardMatcher):
         - `{m,n}` matches between m and n times, inclusive (min=m, max=n)
 
     Matching is greedy and doesn't backtrack. I.e. the following pattern
-    can never match: `(* @foo=[(*)* (OtherNode)])` because the first wildcard
+    can never match: `(@foo=[()* (OtherNode)])` because the first wildcard
     will consume the entire sequence.
 
     In pattern DSL, this is represented as a matcher followed by one of the
@@ -409,7 +354,7 @@ class AlternativeMatcher(BaseMatcher):
 
     """
 
-    matchers: tuple[NodeMatcher | PatternRefMatcher, ...]
+    matchers: tuple["NodeMatcher | PatternRefMatcher", ...]
 
     def __post_init__(self) -> None:
         if len(self.matchers) == 0:
@@ -426,6 +371,8 @@ class AlternativeMatcher(BaseMatcher):
 
 @dataclass(frozen=True, slots=True)
 class NodeMatcher(BaseMatcher):
+    """Matcher that matches an object against a tuple of types and set of attribute matchers."""
+
     types: tuple[type[ASTNode], ...]
     """Tuple of ASTNode types to match against.
 
@@ -541,3 +488,60 @@ def validate_pattern(
         return False, "Incorrect pattern definition. Unexpected error"
 
     return True, "Valid pattern definition"
+
+
+_PATTERN_CACHE: dict[int, BaseMatcher] = {}
+
+
+def _make_key(pattern_def: str, types: Mapping[str, type[Any]]) -> int:
+    """Create a key for the LRU cache based on pattern definition and types."""
+    return hash((pattern_def, tuple(types.items())))
+
+
+def from_pattern(pattern_def: str, types: Mapping[str, type[Any]] | None = None) -> BaseMatcher:
+    """Create a Matcher from a pattern definition.
+
+    Args:
+        pattern_def: The pattern definition to parse.
+        types: An optional mapping of AST class names to their types. If not provided,
+            the default mapping from `pyoak.serialize` is used.
+
+    Returns:
+        A BaseMatcher instance.
+
+    Raises:
+        ASTXpathOrPatternDefinitionError: Raised if the pattern definition is incorrect
+
+    """
+    if types is None:
+        # Only import if needed
+        from ..serialize import TYPES
+
+        types = TYPES
+
+    # Check cache
+    key = _make_key(pattern_def, types)
+
+    matcher = _PATTERN_CACHE.get(key, None)
+
+    if matcher is not None:
+        return matcher
+
+    # Import here to avoid circular imports
+    from .parser import Parser
+
+    try:
+        matcher = Parser(types).parse_pattern(pattern_def)
+    except ASTXpathOrPatternDefinitionError:
+        raise
+    except Exception as e:
+        if config.TRACE_LOGGING:
+            logger.debug(f"Unexpected error during pattern definition grammar generation: {e}")
+
+        raise ASTXpathOrPatternDefinitionError(
+            "Failed to parse a tree pattern due to internal error. Please report it!"
+        ) from e
+
+    _PATTERN_CACHE[key] = matcher
+
+    return matcher

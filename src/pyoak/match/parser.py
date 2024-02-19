@@ -85,11 +85,11 @@ from typing import (
 )
 
 from pyoak import config
-from pyoak.match.error import ASTXpathOrPatternDefinitionError
-from pyoak.match.helpers import check_and_get_ast_node_type, point_at_index
-from pyoak.node import ASTNode
 
+from ..node import ASTNode
 from .element import ASTXpathElement
+from .error import ASTXpathOrPatternDefinitionError
+from .helpers import check_and_get_ast_node_type, point_at_index
 from .pattern import (
     AlternativeMatcher,
     AnyMatcher,

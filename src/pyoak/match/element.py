@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
@@ -8,7 +6,7 @@ if TYPE_CHECKING:
 
 
 class ASTXpathElement(NamedTuple):
-    ast_class_or_pattern: type[ASTNode] | BaseMatcher
+    ast_class_or_pattern: "type[ASTNode] | BaseMatcher"
     parent_field: str | None
     parent_index: int | None
     anywhere: bool

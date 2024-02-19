@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generator, Mapping, Sequence
@@ -15,7 +13,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _match_node_element(node: ASTNode, element: ASTXpathElement) -> bool:
+def _match_node_element(node: ASTNode, element: "ASTXpathElement") -> bool:
     if isinstance(element.ast_class_or_pattern, type):
         # If the element is a type, then we need to check if the node is an instance of that type
         if not isinstance(node, element.ast_class_or_pattern):
@@ -38,7 +36,7 @@ def _match_node_element(node: ASTNode, element: ASTXpathElement) -> bool:
 
 
 def _match_node_xpath(
-    node: ASTNode, elements: list[ASTXpathElement], ancestors: Sequence[ASTNode]
+    node: ASTNode, elements: list["ASTXpathElement"], ancestors: Sequence[ASTNode]
 ) -> bool:
     """Match the `node` against the `elements` of the xpath.
 
@@ -93,7 +91,7 @@ def _match_node_xpath(
     return False
 
 
-_AST_XPATH_CACHE: dict[int, ASTXpath] = {}
+_AST_XPATH_CACHE: dict[int, "ASTXpath"] = {}
 
 
 def _make_key(xpath: str, types: Mapping[str, type[Any]]) -> int:
@@ -110,7 +108,7 @@ class _DUMMY_XPATH_ROOT(ASTNode):
 class ASTXpath:
     """A parsed XPath for AST nodes."""
 
-    def __new__(cls, xpath: str, types: Mapping[str, type[Any]] | None = None) -> ASTXpath:
+    def __new__(cls, xpath: str, types: Mapping[str, type[Any]] | None = None) -> "ASTXpath":
         if types is None:
             # Only import if needed
             from ..serialize import TYPES

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from dataclasses import fields
 from functools import lru_cache
 from typing import Any, Mapping, Type

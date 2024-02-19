@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ⚠️ Breaking
 
-- TBD
+- `BasePattern.from_pattern` API has been removed. Use the standalone `from_pattern` function in `pyoak.pattern` module.
 
 ### 🐛 Fixed
 
@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🔥 Removed
 
-- TBD
+- remove PEP 563 annotations from matcher
 
 ### 📖 Documentation
 

@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 from pyoak.match.error import ASTXpathOrPatternDefinitionError
-from pyoak.match.pattern import BaseMatcher, NodeMatcher, from_pattern, validate_pattern
+from pyoak.match.pattern import NodeMatcher, from_pattern, validate_pattern
 from pyoak.node import ASTNode
 from pyoak.origin import NO_ORIGIN, Origin
 
@@ -174,12 +174,6 @@ def test_correct_pattern_grammar(rule: str, pattern_def: str, clean_ser_types) -
 
     # now the same but trying to create a matcher
     try:
-        _ = BaseMatcher.from_pattern(pattern_def)
-    except ASTXpathOrPatternDefinitionError as e:
-        assert False, f"Raised on rule {rule}: {e}"
-
-    # and using the standard function
-    try:
         _ = from_pattern(pattern_def)
     except ASTXpathOrPatternDefinitionError as e:
         assert False, f"Raised on rule {rule}: {e}"
@@ -290,42 +284,42 @@ def test_props_match_and_capture(clean_ser_types) -> None:
 
     # Test match by content_id
     rule = f'(* @content_id="{test_content_id}")'
-    matcher = BaseMatcher.from_pattern(rule)
+    matcher = from_pattern(rule)
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
     assert values == {}, "Expected empty match dict"
 
     # allow any attributes
     rule = "(Node @foo -> foo_val)"
-    matcher = BaseMatcher.from_pattern(rule)
+    matcher = from_pattern(rule)
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
     assert values == {"foo_val": "fooval"}
 
     # allow any attributes, but mismatch attribute value
     rule = '(Node @foo = "other_val" -> foo_val)'
-    matcher = BaseMatcher.from_pattern(rule)
+    matcher = from_pattern(rule)
     ok, values = matcher.match(node)
     assert not ok, f"Matched, but wasn't supposed to: {rule}"
     assert values == {}, "Expected empty match dict"
 
     # test value alternatives
     rule = '(Node @foo = "other_val|f.o.*l" -> foo_val)'
-    matcher = BaseMatcher.from_pattern(rule)
+    matcher = from_pattern(rule)
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
     assert values == {"foo_val": "fooval"}
 
     # check non-existent attribute
     rule = "(* @non_existent)"
-    matcher = BaseMatcher.from_pattern(rule)
+    matcher = from_pattern(rule)
     ok, values = matcher.match(node)
     assert not ok, f"Matched, but wasn't supposed to: {rule}"
     assert values == {}, "Expected empty match dict"
 
     # Test match by id
     rule = f'(* @id="{node.id}")'
-    matcher = BaseMatcher.from_pattern(rule)
+    matcher = from_pattern(rule)
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
     assert values == {}, "Expected empty match dict"
@@ -333,7 +327,7 @@ def test_props_match_and_capture(clean_ser_types) -> None:
     # Test match None
     node = Node("fooval", None, (), origin=NO_ORIGIN)
     rule = "(* @bar=None -> bar_val)"
-    matcher = BaseMatcher.from_pattern(rule)
+    matcher = from_pattern(rule)
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
     assert values == {"bar_val": None}
@@ -341,7 +335,7 @@ def test_props_match_and_capture(clean_ser_types) -> None:
     # Test match variable
     node = Node("fooval", "fooval", (), origin=NO_ORIGIN)
     rule = "(* @foo -> foo_val @bar=$foo_val)"
-    matcher = BaseMatcher.from_pattern(rule)
+    matcher = from_pattern(rule)
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
     assert values == {"foo_val": "fooval"}
@@ -349,7 +343,7 @@ def test_props_match_and_capture(clean_ser_types) -> None:
     # Test sequence of scalars
     node = Node("fooval", "barval", ("bazval", "bazval2", None, "tail"), origin=NO_ORIGIN)
     rule = '(* @baz=["baz.*", ".*val2", None, * -> tail_val] -> baz_val)'
-    matcher = BaseMatcher.from_pattern(rule)
+    matcher = from_pattern(rule)
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
     assert values == {"tail_val": ("tail",), "baz_val": ("bazval", "bazval2", None, "tail")}
@@ -357,7 +351,7 @@ def test_props_match_and_capture(clean_ser_types) -> None:
     # Test nested sequence of scalars
     node = Node("fooval", "barval", (("bazval", "bazval2"), ("start", "tail")), origin=NO_ORIGIN)
     rule = '(* @baz=[["baz.*", ".*val2"] -> nest1, ["start", * -> tail_val] -> nest2] -> baz_val)'
-    matcher = BaseMatcher.from_pattern(rule)
+    matcher = from_pattern(rule)
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
     assert values == {
@@ -372,7 +366,7 @@ def test_child_field_match_and_capture() -> None:
     # Test none match
     node = PTestParent(origin=origin)
 
-    matcher = BaseMatcher.from_pattern(
+    matcher = from_pattern(
         "(PTestParent @child1=None @child_tuple=[] -> rule_all_none) | "
         "(PTestParent @child_tuple=[] -> rule_tuple_none) | "
         "(PTestParent @child1=None -> rule_first_none)"
@@ -414,7 +408,7 @@ def test_child_field_match_and_capture() -> None:
     )
 
     rule = "(PTestParent @child_tuple -> test_capture)"
-    matcher = BaseMatcher.from_pattern(rule)
+    matcher = from_pattern(rule)
 
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
@@ -433,7 +427,7 @@ def test_child_field_match_and_capture() -> None:
     )
 
     rule = "(PTestParent @child_tuple =[(PTestChild1), (*), (PTestChild2) -> only_capture, *])"
-    matcher = BaseMatcher.from_pattern(rule)
+    matcher = from_pattern(rule)
 
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
@@ -441,7 +435,7 @@ def test_child_field_match_and_capture() -> None:
 
     # Match any remaining
     rule = "(PTestParent @child_tuple =[(*) -> first, * -> remaining])"
-    matcher = BaseMatcher.from_pattern(rule)
+    matcher = from_pattern(rule)
 
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
@@ -459,9 +453,7 @@ def test_var_match() -> None:
         origin=origin,
     )
 
-    macher = BaseMatcher.from_pattern(
-        "(PTestParent @child_tuple=[(* @foo -> cap_foo) -> cap, $cap, *])"
-    )
+    macher = from_pattern("(PTestParent @child_tuple=[(* @foo -> cap_foo) -> cap, $cap, *])")
 
     ok, match_dict = macher.match(node)
     assert ok
@@ -478,7 +470,7 @@ def test_var_match() -> None:
 
     # First, multiple captures should be preserved
     rule = "(PTestParent @child1 -> ch1 @child_any -> ch2 @child_tuple=[$ch1, $ch2])"
-    macher = BaseMatcher.from_pattern(rule)
+    macher = from_pattern(rule)
     ok, match_dict = macher.match(node)
     assert ok, f"Didn't match: {rule}"
     assert match_dict["ch1"] is f1
@@ -487,7 +479,7 @@ def test_var_match() -> None:
 
     # Second, in alternatives, only the matching capture should be preserved
     rule = '(PTestParent @child1=<(PTestChild1 @foo="no match") | (PTestChild1 @foo="predecessor")> -> ch1 @child_any -> ch2 @child_tuple=[$ch1, $ch2] -> ch_tup)'
-    macher = BaseMatcher.from_pattern(rule)
+    macher = from_pattern(rule)
     ok, match_dict = macher.match(node)
     assert ok, f"Didn't match: {rule}"
     assert match_dict["ch1"] is f1
@@ -520,7 +512,7 @@ def test_wildcard_match(rule: str, matched: bool) -> None:
         origin=NO_ORIGIN,
     )
 
-    macher = BaseMatcher.from_pattern(rule)
+    macher = from_pattern(rule)
     ok, match_dict = macher.match(node)
     assert ok == matched, f"Didn't match: {rule}"
     assert match_dict == {}, "Expected empty match dict"
@@ -536,7 +528,7 @@ def test_multi_capture() -> None:
         origin=origin,
     )
 
-    macher = BaseMatcher.from_pattern("(PTestParent @child_tuple=[(*) -> +cap, (*), (*) -> +cap])")
+    macher = from_pattern("(PTestParent @child_tuple=[(*) -> +cap, (*), (*) -> +cap])")
 
     ok, match_dict = macher.match(node)
     assert ok
@@ -553,14 +545,14 @@ def test_multi_capture() -> None:
         "(* @child_tuple=[(*) -> +cap, (*){2} -> +cap])",
         "(* @child_tuple=[(*) -> +cap, (*){1,3} -> +cap])",
     ]:
-        macher = BaseMatcher.from_pattern(rule)
+        macher = from_pattern(rule)
         ok, match_dict = macher.match(node)
         assert ok
         assert match_dict == {"cap": (f1, f2, only1)}
 
     # Now make sure capture variable context is correctly scoped
     # i.e. discarded alternatives do not pollute the match dict
-    macher = BaseMatcher.from_pattern(
+    macher = from_pattern(
         # First alternative will partially match, but will be discarded
         "(PTestParent @child_tuple=[(*) -> +cap, (*) -> cap1]) |"
         "(PTestParent @child_tuple=[(*) -> +cap, (*), (*) -> +cap])"
@@ -571,9 +563,7 @@ def test_multi_capture() -> None:
     assert match_dict == {"cap": (f1, only1)}
 
     # Test with capturing at multiple levels
-    macher = BaseMatcher.from_pattern(
-        "(PTestParent @child_tuple=[(* @foo -> +cap) -> +cap, * -> +cap])"
-    )
+    macher = from_pattern("(PTestParent @child_tuple=[(* @foo -> +cap) -> +cap, * -> +cap])")
 
     ok, match_dict = macher.match(node)
     assert ok
@@ -586,19 +576,19 @@ def test_empty_sequence_match() -> None:
         origin=origin,
     )
 
-    macher = BaseMatcher.from_pattern("(PTestParent @child_tuple=[(PTestChild1) -> cap, *])")
+    macher = from_pattern("(PTestParent @child_tuple=[(PTestChild1) -> cap, *])")
 
     ok, match_dict = macher.match(node)
     assert not ok
     assert not match_dict
 
-    macher = BaseMatcher.from_pattern("(PTestParent @child_tuple=[* -> cap_empty_seq])")
+    macher = from_pattern("(PTestParent @child_tuple=[* -> cap_empty_seq])")
 
     ok, match_dict = macher.match(node)
     assert ok
     assert match_dict["cap_empty_seq"] == ()
 
-    macher = BaseMatcher.from_pattern("(PTestParent @child_tuple=[] -> cap_empty_node)")
+    macher = from_pattern("(PTestParent @child_tuple=[] -> cap_empty_node)")
 
     ok, match_dict = macher.match(node)
     assert ok
@@ -618,7 +608,7 @@ def test_same_name_capture() -> None:
     )
 
     rule = "(PTestParent @child_tuple=[(PTestChild1 @foo -> cap), (PTestChild1 @foo -> cap)])"
-    matcher = BaseMatcher.from_pattern(rule)
+    matcher = from_pattern(rule)
 
     ok, values = matcher.match(node)
     assert ok, f"Didn't match: {rule}"
@@ -628,7 +618,7 @@ def test_same_name_capture() -> None:
     cnode = PTestChild1("deep_1", origin=origin)
 
     rule = '(PTestChild1 @foo=".*_1" -> cap) | (PTestChild1 @foo=".*_2" -> cap)'
-    matcher = BaseMatcher.from_pattern(rule)
+    matcher = from_pattern(rule)
 
     ok, values = matcher.match(cnode)
     assert ok, f"Didn't match: {rule}"
@@ -636,14 +626,14 @@ def test_same_name_capture() -> None:
 
     # the outer use of the capture name "wins"
     rule = "(PTestParent @child_tuple=[(PTestChild1 @foo -> cap), *] -> cap)"
-    macher = BaseMatcher.from_pattern(rule)
+    macher = from_pattern(rule)
     ok, match_dict = macher.match(node)
     assert ok, f"Didn't match: {rule}"
     assert match_dict == {"cap": (ch1, ch2)}
 
     # Same but with top level capture
     rule = "(PTestChild1 @foo -> cap) | (*) -> cap"
-    macher = BaseMatcher.from_pattern(rule)
+    macher = from_pattern(rule)
     ok, match_dict = macher.match(node)
     assert ok, f"Didn't match: {rule}"
     assert match_dict["cap"] is node
@@ -673,7 +663,7 @@ def test_with_pattern() -> None:
         "#rec"
     )
 
-    matcher = BaseMatcher.from_pattern(rule)
+    matcher = from_pattern(rule)
     ok, match_dict = matcher.match(node)
     assert ok
     assert match_dict["vals"] == (1, 2, 3, 4, 5, 6, 7, 8)

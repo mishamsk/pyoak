@@ -362,10 +362,10 @@ Types are instance comparisons, so any subclass matches a type.
 Pattern matching is done using a "matcher" object. To create a matcher:
 
 ```python
-from pyoak.match.pattern import validate_pattern
+from pyoak.match.pattern import from_pattern
 
 try:
-    macher = BaseMatcher.from_pattern("(RootClass @child_tuple=[(*) -> cap $cap *])")
+    macher = from_pattern("(RootClass @child_tuple=[(*) -> cap $cap *])")
 except ASTXpathOrPatternDefinitionError as e:
     # Print out the reason why the pattern is invalid
     print(e)
@@ -397,7 +397,7 @@ The result is a tuple: a boolean indicating if the pattern has matched and a mat
 The match dict will contain a mapping from capture keys to values. Capture keys are the names you can embed within the pattern to store something within the matched node. E.g.:
 
 ```python
-matcher = BaseMatcher.from_pattern("(ParentType @child_tuple_field =[(Literal) -> first_child, * -> remaining_children])")
+matcher = from_pattern("(ParentType @child_tuple_field =[(Literal) -> first_child, * -> remaining_children])")
 ```
 
 this pattern matches any subclass of `ParentType` that has a child field `child_tuple_field` which is a sequence, first child of type Literal and then zero or more children of any type and shape.
@@ -407,7 +407,7 @@ The capture key `first_child` will be mapped to the first child of the node that
 You can match multiple alternatives using the `|` operator:
 
 ```python
-matcher = BaseMatcher.from_pattern("(OneType @attr -> capture) | (AnotherType @other_attr -> capture)")
+matcher = from_pattern("(OneType @attr -> capture) | (AnotherType @other_attr -> capture)")
 ```
 
 notice that the capture key is the same in both alternatives. This allows you to match either of the two patterns and get the value of the attribute that matched.
@@ -415,7 +415,7 @@ notice that the capture key is the same in both alternatives. This allows you to
 If you want to gather multiple values into a tuple, you can use the `+` operator:
 
 ```python
-matcher = BaseMatcher.from_pattern("(OneType @attr1 -> +capture @attr2 -> +capture)")
+matcher = from_pattern("(OneType @attr1 -> +capture @attr2 -> +capture)")
 ```
 
 this will match any subclass of `OneType` that has two attributes `attr1` and `attr2` and will gather both values into a tuple.
@@ -471,7 +471,7 @@ rule = (
     "#rec"
 )
 
-matcher = BaseMatcher.from_pattern(rule)
+matcher = from_pattern(rule)
 ok, match_dict = matcher.match(node)
 assert sum(match_dict["vals"]) == 10
 print(sum(match_dict["vals"]))

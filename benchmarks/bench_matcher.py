@@ -4,7 +4,7 @@ import math
 import time
 import timeit
 
-from pyoak.match.pattern import BaseMatcher
+from pyoak.match.pattern import from_pattern
 from pyoak.match.xpath import ASTXpath
 from sample_tree import gen_sample_tree
 
@@ -76,7 +76,7 @@ def run_benchmark():
     )
 
     st = time.monotonic()
-    matcher = BaseMatcher.from_pattern(recursive_patterns)
+    matcher = from_pattern(recursive_patterns)
     print(f"Time to build new matcher: {time.monotonic() - st}")
 
     ok, match_dict = matcher.match(tree)
