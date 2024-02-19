@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from ..node import ASTNode
-    from .pattern import BaseMatcher
+    from .matcher import BaseMatcher
 
 
 class ASTXpathElement(NamedTuple):

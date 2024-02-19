@@ -90,7 +90,7 @@ from ..node import ASTNode
 from .element import ASTXpathElement
 from .error import ASTXpathOrPatternDefinitionError
 from .helpers import check_and_get_ast_node_type, point_at_index
-from .pattern import (
+from .matcher import (
     AlternativeMatcher,
     AnyMatcher,
     BaseMatcher,
