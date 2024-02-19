@@ -16,12 +16,12 @@ tasks:
   # Type check and lint
   pre-commit:
     desc: "Run pre-commit hooks on all files"
-    cmd: pre-commit run --all-files
+    cmd: poetry run pre-commit run --all-files
     ignore_error: true
 
   mypy:
     desc: "Run type checking"
-    cmd: mypy src tests
+    cmd: poetry run mypy
     ignore_error: true
 
   lint:

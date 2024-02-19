@@ -119,6 +119,7 @@ warn_unused_configs = true
 follow_imports = "normal"
 
 mypy_path = "src"
+files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
 # Ignore import errors for 3rd party libraries with type stubs
@@ -129,6 +130,7 @@ ignore_missing_imports = true
 module = ["pyoak.*"]
 
 disallow_any_generics = true
+disallow_any_unimported = true
 disallow_subclassing_any = true
 disallow_untyped_calls = true
 disallow_untyped_defs = true
