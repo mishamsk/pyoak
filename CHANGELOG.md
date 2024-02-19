@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ⚠️ Breaking
 
-- `BasePattern.from_pattern` API has been removed. Use the standalone `from_pattern` function in `pyoak.pattern` module.
+- `BaseMatcher.from_pattern` API has been removed. Use the standalone `from_pattern` function in `pyoak.pattern` module.
+- `BaseMatcher` class and all of it's subclasses has been moved to a separate module `pyoak.match.matcher`. While the pattern to matcher functions remain in `pyoak.match.pattern` module.
 
 ### 🐛 Fixed
 

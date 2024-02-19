@@ -4,7 +4,7 @@ import math
 import time
 import timeit
 
-from pyoak.match.matcher import from_pattern
+from pyoak.match.pattern import from_pattern
 from pyoak.match.xpath import ASTXpath
 from sample_tree import gen_sample_tree
 

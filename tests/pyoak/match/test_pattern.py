@@ -5,7 +5,8 @@ from typing import Any
 
 import pytest
 from pyoak.match.error import ASTXpathOrPatternDefinitionError
-from pyoak.match.matcher import NodeMatcher, from_pattern, validate_pattern
+from pyoak.match.matcher import NodeMatcher
+from pyoak.match.pattern import from_pattern, validate_pattern
 from pyoak.node import ASTNode
 from pyoak.origin import NO_ORIGIN, Origin
 
