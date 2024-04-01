@@ -17,8 +17,8 @@ from pyoak.error import (
     ASTNodeReplaceWithError,
     InvalidTypes,
 )
+from pyoak.match import ASTXpath
 from pyoak.match.error import ASTXpathOrPatternDefinitionError
-from pyoak.match.xpath import ASTXpath
 from pyoak.node import (
     AST_SERIALIZE_DIALECT_KEY,
     ASTNode,

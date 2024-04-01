@@ -327,7 +327,7 @@ for node in root_node.findall("//IntLiteral"):
 If you want to match a given node, i.e. check if it's in the path, you must create an ASTXpath object and call its `match` method:
 
 ```python
-from pyoak.match.xpath import ASTXpath
+from pyoak.match import ASTXpath
 
 root_node = parse("x = 1")
 initializer = root_node.find("//IntLiteral")
@@ -362,7 +362,7 @@ Types are instance comparisons, so any subclass matches a type.
 Pattern matching is done using a "matcher" object. To create a matcher:
 
 ```python
-from pyoak.match.pattern import from_pattern
+from pyoak.match import from_pattern
 
 try:
     macher = from_pattern("(RootClass @child_tuple=[(*) -> cap $cap *])")
@@ -374,7 +374,7 @@ except ASTXpathOrPatternDefinitionError as e:
 You can also validate a pattern without creating a matcher first:
 
 ```python
-from pyoak.match.pattern import validate_pattern
+from pyoak.match import validate_pattern
 
 valid, msg = validate_pattern("(NotARealCalss ...)")
 
@@ -431,7 +431,7 @@ Try running this in your Python interpreter:
 from dataclasses import dataclass, field
 from typing import Any
 
-from pyoak.match.pattern import BaseMatcher
+from pyoak.match import from_pattern
 from pyoak.node import ASTNode
 from pyoak.origin import NO_ORIGIN, Origin
 

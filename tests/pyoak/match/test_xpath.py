@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
+from pyoak.match import ASTXpath
 from pyoak.match.error import ASTXpathOrPatternDefinitionError
-from pyoak.match.xpath import ASTXpath
 from pyoak.node import ASTNode
 from pyoak.origin import NO_ORIGIN
 
