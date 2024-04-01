@@ -1,3 +1,4 @@
+import sys
 from abc import ABC, abstractmethod
 from inspect import Parameter, getmembers, getmro, isfunction, signature
 from typing import Any, Callable, ClassVar, Generic, Mapping, TypeVar
@@ -5,21 +6,31 @@ from typing import Any, Callable, ClassVar, Generic, Mapping, TypeVar
 from .error import ASTTransformError
 from .node import ASTNode
 
+if sys.version_info >= (3, 11):
+    from typing import TypeVarTuple, Unpack
+else:
+    from typing_extensions import TypeVarTuple, Unpack
+
 _VRT = TypeVar("_VRT")
+_VIT = TypeVarTuple("_VIT")
 
 
-class ASTVisitor(Generic[_VRT], ABC):
+class ASTVisitor(Generic[_VRT, Unpack[_VIT]], ABC):
     """A visitor generic base class for an AST visitor.
 
     Subclasses must implement a generic_visit method that will be called
     when no matching visit method is found.
 
-    Subclasses can also implement visit_{node_type}(self, node: NodeType) methods
-    that will be called when a matching node is visited.
+    Subclasses can also implement visitor methods:
+
+    >>> dev visit_any_suffix(self, node: NodeType, *args: *_VIT) -> _VRT:
+    ...     pass
+
+    which will be called when a matching node is visited.
 
     Methods are matched by the node type annotation of the second argument. If none
-    is found a TypeError is raised. Type annotations must be simple subclasses of
-    ASTNode, otherwise an exception is raised.
+    is found a TypeError is raised. Type annotations must be simple subclass of
+    ASTNode, otherwise an exception is raised at class creation.
 
     Note that visitor method dispatch logic is cached at class creation time (for
     method functions) and bound methods are cached on instances. Thus monkey patching
@@ -37,11 +48,21 @@ class ASTVisitor(Generic[_VRT], ABC):
     ...     def visit_WrongNamedNode(self, node: MyOtherNode) -> None:
     ...         pass
 
-    This will raise a TypeError because the last method name doesn't match the node
+    will raise a TypeError because the last method name doesn't match the node
     type annotation.
 
-    Defaul `visit` method assumes only one argument, the node to visit. If you need
-    to pass additional arguments to the visitor methods, you can override the
+    Defaul `visit` method accepts node to visit and arbitrary positional args.
+    Types of the extra args can be specified with a type annotation on the class
+    itself. E.g.
+
+    >>> class MyVisitor(ASTVisitor[str, int]):
+    ...     def visit_MyNode(self, node: MyNode, arg: int) -> str:
+    ...         pass
+
+    will accept an additional integer argument when visiting a MyNode. Due to the
+    limitations of Python's type system, only positional only arguments are supported.
+
+    If you need a more complicated `visit` method signature, you can override the
     `generic_visit`, `visit` methods and use the `_dispatch_visit_method` in
     your `visit` implementation to get a matching visitor method for a given node.
     Note that this will raise type errors in static type checkers if additional
@@ -78,8 +99,7 @@ class ASTVisitor(Generic[_VRT], ABC):
         Dispatching is done based on a registry of methods, looked up on the class.
         All methods that look like: `visit[arbitrary suffix](self, node: ASTNodeType, ...)`
         are inspected and the second argument's type annotation is used to determine
-        which method to call for which node type. By default method name itself is ignored,
-        unless `validate` is set to True when subclassing the visitor.
+        which method to call.
 
         If the visitor `strict` class var is True, then visit method is matched by
         the exact type match. Otherise the node mro is walked in reverse order until
@@ -118,17 +138,8 @@ class ASTVisitor(Generic[_VRT], ABC):
     def _dispatch_visit(self, node: ASTNode) -> Callable[..., _VRT]:
         """Returns a bound visit method for a given node.
 
-        You can use it when overriding visit method directly, if you want to
-        extend visit method signatures in a subclass.
-
-        Dispatching is done based on `visit_{__class__.__name__}(self, node: ASTNodeType, ...)`
-        second argument's type annotation. By default method name itself is ignored,
-        unless `validate` is set to True when subclassing the visitor.
-
-        If the visitor `strict` class var is True, then visit method is matched by
-        the exact type match. Otherise the node mro is walked in reverse order until
-        until an exact match is found. Unlike stdlib singledispatch, we are not
-        checking for abstract (virtual) base classes.
+        You can use it when overriding visit method directly, if you want to extend visit method
+        signatures in a subclass.
 
         """
 
@@ -150,10 +161,10 @@ class ASTVisitor(Generic[_VRT], ABC):
         return visitor_bound_method
 
     @abstractmethod
-    def generic_visit(self, node: ASTNode) -> _VRT:
+    def generic_visit(self, node: ASTNode, *args: Unpack[_VIT]) -> _VRT:
         raise NotImplementedError
 
-    def visit(self, node: ASTNode) -> _VRT:
+    def visit(self, node: ASTNode, *args: Unpack[_VIT]) -> _VRT:
         """Visits the given node by finding and calling a matching visitor method or generic_visit
         if it doesn't exist.
 
@@ -180,7 +191,7 @@ class ASTVisitor(Generic[_VRT], ABC):
 
         """
 
-        return self._dispatch_visit(node)(node)
+        return self._dispatch_visit(node)(node, *args)
 
     def __init_subclass__(cls, *, validate: bool = False) -> None:
         """Iterate over new visitor methods and check that names match the node type annotation."""

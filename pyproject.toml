@@ -20,6 +20,7 @@ packages = [{ include = "pyoak", from = "src" }]
 python = ">=3.10"
 rich = ">=12.5.0, <14"
 mashumaro = ">=3.8.1"
+typing-extensions = { version = ">=4.1.0", python = "<3.11" }
 
 # Optional serialization dependencies
 pyyaml = { version = "^6.0.0", optional = true }

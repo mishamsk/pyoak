@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🚀 Added
 
 - ASTVisitor will check for multiple visit methods with the same type annotation and raise an error if found
+- ASTVisitor is now generic over a tuple of visit method extra arguments, allowing for type safe of visitors with additional arguments out of the box
 - `ASTXpath`, `from_pattern`, `validate_pattern` can now be imported directly from `pyoak.match` package
 
 ### ✨ Changed

@@ -185,17 +185,28 @@ def test_visitor_with_extra_args(clean_ser_types) -> None:
     class Base(ASTNode):
         origin: Origin = field(init=False, default=NO_ORIGIN)
 
-    class FooVisitor(ASTVisitor[str]):
-        def visit(self, node: ASTNode, extra_arg: int = 0) -> str:
-            return self._dispatch_visit(node)(node, extra_arg)
-
-        def generic_visit(self, node: ASTNode, extra_arg: int = 0) -> str:
+    # Check built-in support for positional extra arguments
+    class FooVisitor(ASTVisitor[str, int]):
+        def generic_visit(self, node: ASTNode, extra_arg: int) -> str:
             return f"foo generic visit: {extra_arg}"
 
         def visit_Base(self, node: Base, extra_arg: int) -> str:
             return f"foo visit base: {extra_arg}"
 
     assert FooVisitor().visit(Base(), 42) == "foo visit base: 42"
+
+    # Check custom visit method with keyword extra arguments
+    class FooKwVisitor(ASTVisitor[str]):
+        def visit(self, node: ASTNode, *, extra_arg: int = 0) -> str:
+            return self._dispatch_visit(node)(node, extra_arg=extra_arg)
+
+        def generic_visit(self, node: ASTNode, *, extra_arg: int = 0) -> str:
+            return f"foo generic visit: {extra_arg}"
+
+        def visit_Base(self, node: Base, *, extra_arg: int) -> str:
+            return f"foo visit base: {extra_arg}"
+
+    assert FooKwVisitor().visit(Base(), extra_arg=42) == "foo visit base: 42"
 
 
 def test_visitor_validation(clean_ser_types) -> None:

@@ -525,8 +525,6 @@ Important notes:
 
 A base class for all visitors that need to transform the tree. It inherits from `ASTVisitor`, thus all of the notes above also apply to it.
 
-> ‼️ This is the recommended way of transforming the tree when you need to do a lot of changes. For simple changes, see `ASTTransformer` below or use `replace_with` directly.
-
 Instead of calling `visit`, you'd call the `transform` method (although `visit` will do the same thing).
 
 Unlike regular visitors, this one always works on a detached copy of the tree. This is necessary to ensure that the original tree is only modified and replaced on successful transformation.
