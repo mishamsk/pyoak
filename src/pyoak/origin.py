@@ -28,8 +28,7 @@ SETS_DELIM = "||"
 class FQN(ABC):
     @property
     @abstractmethod
-    def fqn(self) -> str:
-        ...
+    def fqn(self) -> str: ...
 
 
 # -----------------------------------------------------------------------------

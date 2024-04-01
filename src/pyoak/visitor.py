@@ -143,9 +143,9 @@ class ASTVisitor(Generic[_VRT], ABC):
         visitor_method = self.__dispatch_visit_method(node.__class__)
 
         # Create a bound method and cache it
-        self.__bound_visitor_dispatch_cache__[node.__class__] = (
-            visitor_bound_method
-        ) = visitor_method.__get__(self, self.__class__)
+        self.__bound_visitor_dispatch_cache__[node.__class__] = visitor_bound_method = (
+            visitor_method.__get__(self, self.__class__)
+        )
 
         return visitor_bound_method
 

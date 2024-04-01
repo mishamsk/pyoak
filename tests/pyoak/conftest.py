@@ -35,8 +35,7 @@ class ConfigFixtureProtocol(Protocol):
         *,
         logging: bool = config.TRACE_LOGGING,
         runtime_checks: bool = config.RUNTIME_TYPE_CHECK,
-    ) -> AbstractContextManager[None]:
-        ...
+    ) -> AbstractContextManager[None]: ...
 
 
 @pytest.fixture

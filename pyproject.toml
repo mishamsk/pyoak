@@ -34,15 +34,15 @@ all = ["msgpack", "orjson", "pyyaml"]
 
 [tool.poetry.group.dev.dependencies]
 bump2version = "^1.0.1"
-tox = "^4.11.1"
+tox = "^4.14.2"
 tox-gh = "^1.3.1"
 
 [tool.poetry.group.pre.dependencies]
-ruff = "^0.1.8"
-pre-commit = "^3.3.3"
+ruff = "^0.3.4"
+pre-commit = "^3.7.0"
 
 [tool.poetry.group.mypy.dependencies]
-mypy = "^1.7.1"
+mypy = "^1.9.0"
 types-pyyaml = "^6.0.12.11"
 orjson = "^3.9.10"
 
@@ -73,6 +73,8 @@ markers = [
 line-length = 100
 target-version = "py310"
 
+[tool.ruff.lint]
+
 select = [
     "E",    # pycodestyle errors
     "W",    # pycodestyle warnings
@@ -92,14 +94,14 @@ ignore = [
 # Avoid trying to fix flake8-bugbear (`B`) violations.
 unfixable = ["B"]
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/*" = ["B", "PERF401", "F821"]
 
-[tool.ruff.mccabe]
+[tool.ruff.lint.mccabe]
 max-complexity = 18
 
-[tool.ruff.pydocstyle]
+[tool.ruff.lint.pydocstyle]
 convention = "google"
 
 [tool.docformatter]

@@ -1,4 +1,5 @@
 """Alternative implementations of dunder methods for ASTNode."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
