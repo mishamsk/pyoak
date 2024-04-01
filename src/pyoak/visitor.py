@@ -52,12 +52,12 @@ class ASTVisitor(Generic[_VRT], ABC):
 
     """
 
-    # Classvar to store the class to method mapping. Automatically
+    # Classvar to store the node type to method mapping. Automatically
     # populated by __init_subclass__.
-    __visit_method_registry__: ClassVar[Mapping[type[ASTNode], Callable[..., _VRT]]]  # type: ignore[misc]
+    __visit_methods_registry__: ClassVar[Mapping[type[ASTNode], Callable[..., _VRT]]]  # type: ignore[misc]
 
-    # This is a class level cache for dispatching to unbound methods.
-    __dispatch_cache__: ClassVar[dict[type[ASTNode], Callable[..., _VRT]]]  # type: ignore[misc]
+    # This is a class level cache for dispatching to unbound visit methods.
+    __unbound_visitor_dispatch_cache__: ClassVar[dict[type[ASTNode], Callable[..., _VRT]]]  # type: ignore[misc]
 
     strict: ClassVar[bool] = False
     """Strict visitors match visit methods to nodes by exact type.
@@ -69,14 +69,16 @@ class ASTVisitor(Generic[_VRT], ABC):
     def __init__(self) -> None:
         # Create an instance cache for dispatching which will have
         # bound methods instead of class functions.
-        self.__visit_dispatch_cache__: dict[type[ASTNode], Callable[..., _VRT]] = {}
+        self.__bound_visitor_dispatch_cache__: dict[type[ASTNode], Callable[..., _VRT]] = {}
 
     @classmethod
     def __dispatch_visit_method(cls, node_type: type[ASTNode]) -> Callable[..., _VRT]:
-        """Returns a visit method for a given node type.
+        """Returns an unbounded visit method for a given node type.
 
-        Dispatching is done based on `visit_{__class__.__name__}(self, node: ASTNodeType, ...)`
-        second argument's type annotation. By default method name itself is ignored,
+        Dispatching is done based on a registry of methods, looked up on the class.
+        All methods that look like: `visit[arbitrary suffix](self, node: ASTNodeType, ...)`
+        are inspected and the second argument's type annotation is used to determine
+        which method to call for which node type. By default method name itself is ignored,
         unless `validate` is set to True when subclassing the visitor.
 
         If the visitor `strict` class var is True, then visit method is matched by
@@ -87,7 +89,7 @@ class ASTVisitor(Generic[_VRT], ABC):
         """
 
         # Check if we have cached unbound method for this node type
-        visitor_method = cls.__dispatch_cache__.get(node_type)
+        visitor_method = cls.__unbound_visitor_dispatch_cache__.get(node_type)
 
         if visitor_method is not None:
             # We have a cached undound method, return it
@@ -95,12 +97,12 @@ class ASTVisitor(Generic[_VRT], ABC):
 
         if cls.strict:
             # Strict mode, match by exact type only
-            visitor_method = cls.__visit_method_registry__.get(node_type)
+            visitor_method = cls.__visit_methods_registry__.get(node_type)
         else:
             # Non-strict mode, match by MRO
             mro = getmro(node_type)
             for _class in mro[:-1]:
-                visitor_method = cls.__visit_method_registry__.get(_class, None)
+                visitor_method = cls.__visit_methods_registry__.get(_class, None)
                 if visitor_method is not None:
                     break
 
@@ -109,7 +111,7 @@ class ASTVisitor(Generic[_VRT], ABC):
             visitor_method = cls.generic_visit
 
         # Cache the undound method (this may just rewrite the existing one)
-        cls.__dispatch_cache__[node_type] = visitor_method
+        cls.__unbound_visitor_dispatch_cache__[node_type] = visitor_method
 
         return visitor_method
 
@@ -131,7 +133,7 @@ class ASTVisitor(Generic[_VRT], ABC):
         """
 
         # Check if we already have a bound method for this node type
-        visitor_bound_method = self.__visit_dispatch_cache__.get(node.__class__)
+        visitor_bound_method = self.__bound_visitor_dispatch_cache__.get(node.__class__)
 
         if visitor_bound_method is not None:
             # We have a bound method, return it
@@ -141,9 +143,9 @@ class ASTVisitor(Generic[_VRT], ABC):
         visitor_method = self.__dispatch_visit_method(node.__class__)
 
         # Create a bound method and cache it
-        self.__dispatch_cache__[node.__class__] = visitor_bound_method = visitor_method.__get__(
-            self, self.__class__
-        )
+        self.__bound_visitor_dispatch_cache__[node.__class__] = (
+            visitor_bound_method
+        ) = visitor_method.__get__(self, self.__class__)
 
         return visitor_bound_method
 
@@ -184,7 +186,7 @@ class ASTVisitor(Generic[_VRT], ABC):
         """Iterate over new visitor methods and check that names match the node type annotation."""
 
         # Make sure each subclass has its own dispatch cache
-        cls.__dispatch_cache__ = {}
+        cls.__unbound_visitor_dispatch_cache__ = {}
 
         visit_method_registry: dict[type[ASTNode], Callable[..., _VRT]] = {}
 
@@ -226,6 +228,17 @@ class ASTVisitor(Generic[_VRT], ABC):
                     )
                     continue
 
+                if node_arg_type in visit_method_registry:
+                    errors.append(
+                        (
+                            method_name,
+                            f"Node type '{node_arg_type.__name__}' already has a visit method "
+                            f"'{visit_method_registry[node_arg_type].__name__}'. "
+                            "Multiple visit methods for the same node type are not allowed",
+                        )
+                    )
+                    continue
+
                 if validate:
                     expected_node_type = method_name[6:]
                     if node_arg_type.__name__ != expected_node_type:
@@ -248,7 +261,7 @@ class ASTVisitor(Generic[_VRT], ABC):
                 )
             )
 
-        cls.__visit_method_registry__ = visit_method_registry
+        cls.__visit_methods_registry__ = visit_method_registry
 
         return super().__init_subclass__()
 

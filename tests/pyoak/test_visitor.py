@@ -63,6 +63,25 @@ def test_non_strict_visitor(clean_ser_types) -> None:
     assert foo_visitor.visit(SubSubSibling()) == "foo visit: foo visit SubSubSibling"
     assert foo_visitor.visit(Multi()) == "foo visit: foo visit SubSubSibling"
 
+    # Check that all unbound methods and their bound versions are cached
+    assert foo_visitor.__unbound_visitor_dispatch_cache__ == {
+        Base: FooVisitor.generic_visit,
+        Sub: FooVisitor.visit_Sub,
+        SubSub: FooVisitor.visit_Sub,
+        SubSibling: FooVisitor.generic_visit,
+        SubSubSibling: FooVisitor.visit_SubSubSibling,
+        Multi: FooVisitor.visit_SubSubSibling,
+    }
+
+    assert foo_visitor.__bound_visitor_dispatch_cache__ == {
+        Base: FooVisitor.generic_visit.__get__(foo_visitor, FooVisitor),
+        Sub: FooVisitor.visit_Sub.__get__(foo_visitor, FooVisitor),
+        SubSub: FooVisitor.visit_Sub.__get__(foo_visitor, FooVisitor),
+        SubSibling: FooVisitor.generic_visit.__get__(foo_visitor, FooVisitor),
+        SubSubSibling: FooVisitor.visit_SubSubSibling.__get__(foo_visitor, FooVisitor),
+        Multi: FooVisitor.visit_SubSubSibling.__get__(foo_visitor, FooVisitor),
+    }
+
     # Then test bar visitor
     bar_visitor = BarVisitor()
     assert bar_visitor.visit(Base()) == "foo visit: bar generic visit"
@@ -71,6 +90,25 @@ def test_non_strict_visitor(clean_ser_types) -> None:
     assert bar_visitor.visit(SubSibling()) == "foo visit: bar visit Subsibling"
     assert bar_visitor.visit(SubSubSibling()) == "foo visit: foo visit SubSubSibling"
     assert bar_visitor.visit(Multi()) == "foo visit: bar visit subsub"
+
+    # Check that all unbound methods and their bound versions are cached
+    assert bar_visitor.__unbound_visitor_dispatch_cache__ == {
+        Base: BarVisitor.generic_visit,
+        Sub: FooVisitor.visit_Sub,
+        SubSub: BarVisitor.visit_SubSub,
+        SubSibling: BarVisitor.visit_SubSibling,
+        SubSubSibling: FooVisitor.visit_SubSubSibling,
+        Multi: BarVisitor.visit_SubSub,
+    }
+
+    assert bar_visitor.__bound_visitor_dispatch_cache__ == {
+        Base: BarVisitor.generic_visit.__get__(bar_visitor, BarVisitor),
+        Sub: FooVisitor.visit_Sub.__get__(bar_visitor, BarVisitor),
+        SubSub: BarVisitor.visit_SubSub.__get__(bar_visitor, BarVisitor),
+        SubSibling: BarVisitor.visit_SubSibling.__get__(bar_visitor, BarVisitor),
+        SubSubSibling: FooVisitor.visit_SubSubSibling.__get__(bar_visitor, BarVisitor),
+        Multi: BarVisitor.visit_SubSub.__get__(bar_visitor, BarVisitor),
+    }
 
 
 def test_strict_visitor(clean_ser_types) -> None:
@@ -194,11 +232,14 @@ def test_visitor_validation(clean_ser_types) -> None:
                 # this also tests use of __future__.annotations with local types
                 pass
 
-            def visit_SomeNode(self, node: Base) -> None:
+            def visit_SomeNode(self, node: Sub) -> None:
                 pass
 
             # This should be fine
             def visit_Base(self, node: Base) -> None:
+                pass
+
+            def visit_BaseDup(self, node: Base) -> None:
                 pass
 
             def visitNotAVisitorMethod(self) -> None:
@@ -207,6 +248,8 @@ def test_visitor_validation(clean_ser_types) -> None:
     assert (
         err.value.args[0]
         == "Visitor class 'FailingDummyVisitor' method(s) have invalid signature(s):\n"
+        "  - 'visit_BaseDup': Node type 'Base' already has a visit method 'visit_Base'. "
+        "Multiple visit methods for the same node type are not allowed\n"
         "  - 'visit_ComplexType': Node type annotation must be a single ASTNode subclass\n"
         "  - 'visit_NoAnnotation': Node type annotation is missing\n"
         "  - 'visit_NotASubclass': Node type annotation must be a subclass of ASTNode\n"
