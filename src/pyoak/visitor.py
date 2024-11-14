@@ -1,6 +1,7 @@
 import sys
 from abc import ABC, abstractmethod
-from inspect import Parameter, getmembers, getmro, isfunction, signature
+from functools import singledispatch
+from inspect import Parameter, getmembers, isfunction, signature
 from typing import Any, Callable, ClassVar, Generic, Mapping, TypeVar
 
 from .error import ASTTransformError
@@ -30,7 +31,11 @@ class ASTVisitor(Generic[_VRT, Unpack[_VIT]], ABC):
 
     Methods are matched by the node type annotation of the second argument. If none
     is found a TypeError is raised. Type annotations must be simple subclass of
-    ASTNode, otherwise an exception is raised at class creation.
+    ASTNode (or an ABC in non-strict mode), otherwise an exception is raised at class creation.
+
+    Methods are matched differently based on the strict flag:
+    - If strict is True, the method is matched by exact type only.
+    - If strict is False, singledispatch is used - see stdlib functools.singledispatch.
 
     Note that visitor method dispatch logic is cached at class creation time (for
     method functions) and bound methods are cached on instances. Thus monkey patching
@@ -73,6 +78,10 @@ class ASTVisitor(Generic[_VRT, Unpack[_VIT]], ABC):
 
     """
 
+    # Classvar to store the dispatcher for the visit method
+    # when single dispatch is used.
+    __dispatcher__: ClassVar[Any]
+
     # Classvar to store the node type to method mapping. Automatically
     # populated by __init_subclass__.
     __visit_methods_registry__: ClassVar[Mapping[type[ASTNode], Callable[..., _VRT]]]  # type: ignore[misc]
@@ -83,7 +92,10 @@ class ASTVisitor(Generic[_VRT, Unpack[_VIT]], ABC):
     strict: ClassVar[bool] = False
     """Strict visitors match visit methods to nodes by exact type.
 
-    Non-strict visitors will match by isinstance check in MRO order.
+    Non-strict visitors will match using singledispatch, which means that the method for a node type
+    will be found by walking the extneded MRO of the node type until a matching method is found.
+
+    See functools.singledispatch for more information.
 
     """
 
@@ -102,38 +114,32 @@ class ASTVisitor(Generic[_VRT, Unpack[_VIT]], ABC):
         which method to call.
 
         If the visitor `strict` class var is True, then visit method is matched by
-        the exact type match. Otherise the node mro is walked in reverse order until
-        until an exact match is found. Unlike stdlib singledispatch, we are not
-        checking for abstract (virtual) base classes.
+        the exact type match. Otherwise stdlib's singledispatch is used.
 
         """
 
-        # Check if we have cached unbound method for this node type
-        visitor_method = cls.__unbound_visitor_dispatch_cache__.get(node_type)
-
-        if visitor_method is not None:
-            # We have a cached undound method, return it
-            return visitor_method
-
         if cls.strict:
+            # Check if we have cached unbound method for this node type
+            visitor_method = cls.__unbound_visitor_dispatch_cache__.get(node_type)
+
+            if visitor_method is not None:
+                # We have a cached undound method, return it
+                return visitor_method
+
             # Strict mode, match by exact type only
             visitor_method = cls.__visit_methods_registry__.get(node_type)
-        else:
-            # Non-strict mode, match by MRO
-            mro = getmro(node_type)
-            for _class in mro[:-1]:
-                visitor_method = cls.__visit_methods_registry__.get(_class, None)
-                if visitor_method is not None:
-                    break
 
-        if visitor_method is None:
-            # If we didn't find a visitor method, use generic_visit
-            visitor_method = cls.generic_visit
+            if visitor_method is None:
+                # If we didn't find a visitor method, use generic_visit
+                visitor_method = cls.generic_visit
 
-        # Cache the undound method (this may just rewrite the existing one)
-        cls.__unbound_visitor_dispatch_cache__[node_type] = visitor_method
+            # Cache the undound method (this may just rewrite the existing one)
+            cls.__unbound_visitor_dispatch_cache__[node_type] = visitor_method
 
-        return visitor_method
+            return visitor_method
+
+        # Non-strict mode, match by singledispatch
+        return cls.__dispatcher__.dispatch(node_type)  # type: ignore[no-any-return]
 
     def _dispatch_visit(self, node: ASTNode) -> Callable[..., _VRT]:
         """Returns a bound visit method for a given node.
@@ -196,6 +202,9 @@ class ASTVisitor(Generic[_VRT, Unpack[_VIT]], ABC):
     def __init_subclass__(cls, *, validate: bool = False) -> None:
         """Iterate over new visitor methods and check that names match the node type annotation."""
 
+        cls.__dispatcher__ = singledispatch(cls.visit)
+        cls.__dispatcher__.register(object, cls.generic_visit)
+
         # Make sure each subclass has its own dispatch cache
         cls.__unbound_visitor_dispatch_cache__ = {}
 
@@ -228,9 +237,12 @@ class ASTVisitor(Generic[_VRT, Unpack[_VIT]], ABC):
                     continue
 
                 try:
-                    if not issubclass(node_arg_type, ASTNode):
+                    if not issubclass(node_arg_type, (ASTNode, ABC)):
                         errors.append(
-                            (method_name, "Node type annotation must be a subclass of ASTNode")
+                            (
+                                method_name,
+                                "Node type annotation must be a subclass of ASTNode or an ABC",
+                            )
                         )
                         continue
                 except TypeError:
@@ -262,6 +274,7 @@ class ASTVisitor(Generic[_VRT, Unpack[_VIT]], ABC):
                         continue
 
                 visit_method_registry[node_arg_type] = method
+                cls.__dispatcher__.register(node_arg_type, method)
 
         if errors:
             raise TypeError(

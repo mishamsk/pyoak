@@ -1,3 +1,4 @@
+from abc import ABC
 from dataclasses import dataclass, field
 
 import pytest
@@ -63,16 +64,7 @@ def test_non_strict_visitor(clean_ser_types) -> None:
     assert foo_visitor.visit(SubSubSibling()) == "foo visit: foo visit SubSubSibling"
     assert foo_visitor.visit(Multi()) == "foo visit: foo visit SubSubSibling"
 
-    # Check that all unbound methods and their bound versions are cached
-    assert foo_visitor.__unbound_visitor_dispatch_cache__ == {
-        Base: FooVisitor.generic_visit,
-        Sub: FooVisitor.visit_Sub,
-        SubSub: FooVisitor.visit_Sub,
-        SubSibling: FooVisitor.generic_visit,
-        SubSubSibling: FooVisitor.visit_SubSubSibling,
-        Multi: FooVisitor.visit_SubSubSibling,
-    }
-
+    # Check that all bound versions are cached
     assert foo_visitor.__bound_visitor_dispatch_cache__ == {
         Base: FooVisitor.generic_visit.__get__(foo_visitor, FooVisitor),
         Sub: FooVisitor.visit_Sub.__get__(foo_visitor, FooVisitor),
@@ -91,16 +83,7 @@ def test_non_strict_visitor(clean_ser_types) -> None:
     assert bar_visitor.visit(SubSubSibling()) == "foo visit: foo visit SubSubSibling"
     assert bar_visitor.visit(Multi()) == "foo visit: bar visit subsub"
 
-    # Check that all unbound methods and their bound versions are cached
-    assert bar_visitor.__unbound_visitor_dispatch_cache__ == {
-        Base: BarVisitor.generic_visit,
-        Sub: FooVisitor.visit_Sub,
-        SubSub: BarVisitor.visit_SubSub,
-        SubSibling: BarVisitor.visit_SubSibling,
-        SubSubSibling: FooVisitor.visit_SubSubSibling,
-        Multi: BarVisitor.visit_SubSub,
-    }
-
+    # Check that all bound versions are cached
     assert bar_visitor.__bound_visitor_dispatch_cache__ == {
         Base: BarVisitor.generic_visit.__get__(bar_visitor, BarVisitor),
         Sub: FooVisitor.visit_Sub.__get__(bar_visitor, BarVisitor),
@@ -109,6 +92,57 @@ def test_non_strict_visitor(clean_ser_types) -> None:
         SubSubSibling: FooVisitor.visit_SubSubSibling.__get__(bar_visitor, BarVisitor),
         Multi: BarVisitor.visit_SubSub.__get__(bar_visitor, BarVisitor),
     }
+
+
+def test_non_strict_visitor_virtual_subclass(clean_ser_types) -> None:
+    @dataclass
+    class Base(ASTNode):
+        origin: Origin = field(init=False, default=NO_ORIGIN)
+
+    @dataclass
+    class Sub(Base):
+        pass
+
+    @dataclass
+    class SubSub(Sub):
+        pass
+
+    class Virtual(ABC):
+        pass
+
+    Virtual.register(Sub)
+
+    class FooVisitor(ASTVisitor[str]):
+        def generic_visit(self, node: ASTNode) -> str:
+            return "foo generic visit"
+
+        def visit(self, node: ASTNode) -> str:
+            return "foo visit: " + super().visit(node)
+
+        def visit_Virtual(self, node: Virtual) -> str:
+            return "foo visit sub (virtual)"
+
+        def visit_SubSub(self, node: SubSub) -> str:
+            return "foo visit SubSub"
+
+    class BarVisitor(FooVisitor):
+        def generic_visit(self, node: ASTNode) -> str:
+            return "bar generic visit"
+
+        def visit_Sub(self, node: Sub) -> str:
+            return "bar visit sub"
+
+    # First test foo visitor
+    foo_visitor = FooVisitor()
+    assert foo_visitor.visit(Base()) == "foo visit: foo generic visit"
+    assert foo_visitor.visit(Sub()) == "foo visit: foo visit sub (virtual)"
+    assert foo_visitor.visit(SubSub()) == "foo visit: foo visit SubSub"
+
+    # Then test bar visitor
+    bar_visitor = BarVisitor()
+    assert bar_visitor.visit(Base()) == "foo visit: bar generic visit"
+    assert bar_visitor.visit(Sub()) == "foo visit: bar visit sub"
+    assert bar_visitor.visit(SubSub()) == "foo visit: foo visit SubSub"
 
 
 def test_strict_visitor(clean_ser_types) -> None:
@@ -263,7 +297,7 @@ def test_visitor_validation(clean_ser_types) -> None:
         "Multiple visit methods for the same node type are not allowed\n"
         "  - 'visit_ComplexType': Node type annotation must be a single ASTNode subclass\n"
         "  - 'visit_NoAnnotation': Node type annotation is missing\n"
-        "  - 'visit_NotASubclass': Node type annotation must be a subclass of ASTNode\n"
+        "  - 'visit_NotASubclass': Node type annotation must be a subclass of ASTNode or an ABC\n"
         "  - 'visit_NotEnoughArgs': Method must have at least two parameters: self and node\n"
         "  - 'visit_SomeNode': Method name doesn't match the second argument type annotation\n"
         "  - 'visit_StringAnnotation': Invalid signature or a string annotation that can't be resolved: name 'Base' is not defined"
